@@ -3,7 +3,7 @@ from app.core.auth import get_current_service
 from app.services.service_factory import ServiceFactory
 from app.schemas.service import ServiceRequest, ServiceResponse
 
-router = APIRouter(prefix="/georgetown", tags=["georgetown"])
+router = APIRouter()  # Removed tags
 
 @router.post("/process", response_model=ServiceResponse)
 async def process_georgetown_request(

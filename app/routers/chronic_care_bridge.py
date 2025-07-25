@@ -3,7 +3,7 @@ from app.core.auth import get_current_service
 from app.services.service_factory import ServiceFactory
 from app.schemas.service import ServiceRequest, ServiceResponse
 
-router = APIRouter(prefix="/chronic-care-bridge", tags=["chronic_care_bridge"])
+router = APIRouter()  # Removed tags
 
 @router.post("/process", response_model=ServiceResponse)
 async def process_chronic_care_bridge_request(

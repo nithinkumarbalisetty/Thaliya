@@ -5,7 +5,7 @@ from app.core.auth import authenticate_client, create_access_token, get_service_
 from app.core.config import settings
 from app.schemas.service import ClientCredentials, TokenResponse
 
-router = APIRouter()
+router = APIRouter()  # Removed tags
 security = HTTPBasic()
 
 @router.post("/token", response_model=TokenResponse)
