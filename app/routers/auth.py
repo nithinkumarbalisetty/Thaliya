@@ -1,89 +1,52 @@
-from fastapi import APIRouter, HTTPException, status, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from datetime import timedelta
-
-from app.core.security import authenticate_client, create_access_token, verify_token
+from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from app.core.auth import authenticate_client, create_access_token, get_service_credentials
 from app.core.config import settings
-from app.schemas.auth import ClientCredentials, TokenResponse
+from app.schemas.service import ClientCredentials, TokenResponse
 
 router = APIRouter()
-security = HTTPBearer()
+security = HTTPBasic()
 
 @router.post("/token", response_model=TokenResponse)
-async def get_access_token(credentials: ClientCredentials):
+async def login_for_access_token(credentials: ClientCredentials):
     """
-    Client Credentials OAuth2 flow endpoint.
-    Each service authenticates with their client_id and client_secret.
+    OAuth2 client credentials flow for service authentication
     """
-    service_name = authenticate_client(
-        credentials.client_id, 
-        credentials.client_secret
-    )
+    # Authenticate the client
+    client_data = authenticate_client(credentials.client_id, credentials.client_secret)
     
-    if not service_name:
+    if not client_data:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid client credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    # Create access token
+    access_token_expires = timedelta(hours=settings.ACCESS_TOKEN_EXPIRE_HOURS)
     access_token = create_access_token(
-        subject=credentials.client_id,
-        service_name=service_name,
+        data={
+            "sub": client_data["client_id"],
+            "service_name": client_data["service_name"]
+        },
         expires_delta=access_token_expires
     )
     
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
-        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # in seconds
-        service=service_name
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_HOURS * 3600,  # Convert to seconds
+        service_name=client_data["service_name"]
     )
 
-@router.post("/verify")
-async def verify_access_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+@router.get("/credentials")
+async def get_client_credentials():
     """
-    Verify the validity of an access token.
+    Get available client credentials (for testing/documentation purposes)
+    Note: In production, this endpoint should be removed or secured
     """
-    token = credentials.credentials
-    payload = verify_token(token)
-    
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
     return {
-        "valid": True,
-        "service": payload.get("service"),
-        "client_id": payload.get("sub"),
-        "expires_at": payload.get("exp")
+        "message": "Available client credentials for testing",
+        "credentials": get_service_credentials()
     }
-
-# Dependency to get current service from token
-async def get_current_service(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """
-    Dependency to extract and validate the service from the bearer token.
-    """
-    token = credentials.credentials
-    payload = verify_token(token)
-    
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    service = payload.get("service")
-    if not service:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing service information",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    return service

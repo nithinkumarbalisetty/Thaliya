@@ -1,46 +1,56 @@
-from typing import Dict
-from app.services.base_service import BaseHealthcareService
-from app.services.ecare_service import ECareService
-from app.services.georgetown_service import GeorgeTownService
-from app.services.chronic_care_bridge_service import ChronicCareBridgeService
-from app.services.anarcare_service import AnarcareService
+from typing import Dict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .base_service import BaseHealthcareService
 
 class ServiceFactory:
     """
-    Factory pattern implementation for creating service instances.
-    This allows for easy addition of new services and centralized service management.
+    Factory pattern implementation for creating service instances
     """
     
-    _services: Dict[str, BaseHealthcareService] = {}
+    _services: Dict[str, "BaseHealthcareService"] = {}
     
     @classmethod
-    def get_service(cls, service_name: str) -> BaseHealthcareService:
-        """Get or create service instance"""
+    def get_service(cls, service_name: str) -> "BaseHealthcareService":
+        """
+        Get or create a service instance based on service name
+        """
         if service_name not in cls._services:
             cls._services[service_name] = cls._create_service(service_name)
+        
         return cls._services[service_name]
     
     @classmethod
-    def _create_service(cls, service_name: str) -> BaseHealthcareService:
-        """Create service instance based on service name"""
-        service_map = {
-            "ecare": ECareService,
-            "georgetown": GeorgeTownService,
-            "chroniccarebridge": ChronicCareBridgeService,
-            "anarcare": AnarcareService
-        }
-        
-        if service_name not in service_map:
+    def _create_service(cls, service_name: str) -> "BaseHealthcareService":
+        """
+        Create a new service instance based on service name
+        """
+        # Import here to avoid circular imports
+        if service_name == "ecare":
+            from .ecare_service import ECareService
+            return ECareService()
+        elif service_name == "georgetown":
+            from .georgetown_service import GeorgetownService
+            return GeorgetownService()
+        elif service_name == "chronic_care_bridge":
+            from .chronic_care_bridge_service import ChronicCareBridgeService
+            return ChronicCareBridgeService()
+        elif service_name == "anarcare":
+            from .anarcare_service import AnarcareService
+            return AnarcareService()
+        else:
             raise ValueError(f"Unknown service: {service_name}")
-        
-        return service_map[service_name]()
     
     @classmethod
     def get_available_services(cls) -> list:
-        """Get list of available services"""
-        return ["ecare", "georgetown", "chroniccarebridge", "anarcare"]
+        """
+        Get list of available services
+        """
+        return ["ecare", "georgetown", "chronic_care_bridge", "anarcare"]
     
     @classmethod
     def clear_cache(cls):
-        """Clear service cache (useful for testing)"""
+        """
+        Clear the service cache (useful for testing)
+        """
         cls._services.clear()
