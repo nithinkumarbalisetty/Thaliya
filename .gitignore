@@ -68,3 +68,7 @@ pids
 *.pid
 *.seed
 *.pid.lock
+
+
+# Environment
+thaliya/
