@@ -72,3 +72,4 @@ pids
 
 # Environment
 thaliya/
+test_*.py

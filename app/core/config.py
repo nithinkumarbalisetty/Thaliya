@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     CHRONIC_CARE_BRIDGE_SERVICE_URL: str = "https://api.chroniccarebridge.example.com"
     ANARCARE_SERVICE_URL: str = "https://api.anarcare.example.com"
     
+    # Azure OpenAI Configuration
+    AZURE_OPENAI_ENDPOINT: str = ""
+    AZURE_OPENAI_API_KEY: str = ""
+    AZURE_OPENAI_API_VERSION: str = "2024-05-01-preview"
+    AZURE_OPENAI_DEPLOYMENT_NAME: str = "gpt-35-turbo"
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT: str = "text-embedding-3-large"
+    
+    # RAG Settings
+    RAG_USE_GPU: bool = False
+    RAG_CHUNK_SIZE: int = 1000
+    RAG_CHUNK_OVERLAP: int = 200
+    RAG_MAX_TOKENS: int = 2000
+    
     model_config = {"env_file": ".env", "case_sensitive": True}
 
 # Create settings instance
