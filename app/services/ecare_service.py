@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from app.services.base_service import BaseHealthcareService
 from app.services.rag_service import get_rag_service
+from app.chatbot.core.intent_classifier import get_ai_intent_classifier
 
 logger = logging.getLogger(__name__)
 
@@ -135,8 +136,8 @@ class ECareService(BaseHealthcareService):
             "timestamp": datetime.now()
         })
         
-        # Classify intent and route to appropriate handler
-        intent = self._classify_intent(user_message)
+        # Classify intent using AI and route to appropriate handler
+        intent = await self._classify_intent_ai(user_message)
         response = await self._route_to_handler(user_message, intent, session_id, user_id)
         
         # Apply guardrails
@@ -159,9 +160,28 @@ class ECareService(BaseHealthcareService):
             "timestamp": self._get_timestamp()
         }
     
-    def _classify_intent(self, message: str) -> str:
+    async def _classify_intent_ai(self, message: str) -> str:
         """
-        Classify user intent using pattern matching
+        Classify user intent using AI-powered classification
+        """
+        try:
+            # Get the AI intent classifier
+            classifier = await get_ai_intent_classifier()
+            
+            # Use AI to classify the intent
+            intent = await classifier.classify_intent(message)
+            
+            logger.info(f"AI classified '{message}' as '{intent}'")
+            return intent
+            
+        except Exception as e:
+            logger.error(f"AI intent classification failed: {str(e)}")
+            # Fallback to old pattern matching if AI fails
+            return self._classify_intent_fallback(message)
+    
+    def _classify_intent_fallback(self, message: str) -> str:
+        """
+        Fallback intent classification using pattern matching (backup method)
         """
         message_lower = message.lower()
         
@@ -169,8 +189,10 @@ class ECareService(BaseHealthcareService):
         for intent, patterns in self.intent_patterns.items():
             for pattern in patterns:
                 if re.search(pattern, message_lower, re.IGNORECASE):
+                    logger.info(f"Fallback classified '{message}' as '{intent}'")
                     return intent
         
+        logger.info(f"Fallback classified '{message}' as 'general'")
         return "general"
     
     async def _route_to_handler(self, message: str, intent: str, session_id: str, user_id: str) -> Dict[str, Any]:

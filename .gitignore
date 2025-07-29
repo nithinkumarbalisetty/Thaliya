@@ -68,3 +68,5 @@ pids
 *.pid
 *.seed
 *.pid.lock
+
+test_*.py

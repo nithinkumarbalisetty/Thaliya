@@ -72,6 +72,7 @@ class ProductionRAGService:
         self.azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
         self.azure_deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4")
         self.azure_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-ada-002")
+        self.max_tokens = int(os.getenv("RAG_MAX_TOKENS", "2000"))
         
         # Initialize components
         self.embeddings = None
@@ -187,7 +188,7 @@ class ProductionRAGService:
                     api_version=self.azure_api_version,
                     azure_deployment=self.azure_deployment_name,
                     temperature=0.3,
-                    max_tokens=500
+                    max_tokens=self.max_tokens
                 )
             else:
                 logger.warning("Azure OpenAI not configured, LLM features will be limited")

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E-Care Medical Center - Demo Website</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="nav-brand">
+                <h1><i class="fas fa-heartbeat"></i> E-Care Medical Center</h1>
+            </div>
+            <nav class="nav-menu">
+                <a href="#home">Home</a>
+                <a href="#services">Services</a>
+                <a href="#doctors">Doctors</a>
+                <a href="#contact">Contact</a>
+                <a href="#portal" class="portal-btn">Patient Portal</a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section id="home" class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <h2>Your Health, Our Priority</h2>
+                <p>Comprehensive healthcare services with compassionate care</p>
+                <div class="hero-buttons">
+                    <button class="btn-primary" onclick="openChatbot()">
+                        <i class="fas fa-comments"></i> Chat with Us
+                    </button>
+                    <button class="btn-secondary">Book Appointment</button>
+                </div>
+            </div>
+            <div class="hero-image">
+                <i class="fas fa-user-md hero-icon"></i>
+            </div>
+        </div>
+    </section>
+
+    <!-- Services Section -->
+    <section id="services" class="services">
+        <div class="container">
+            <h2>Our Medical Services</h2>
+            <div class="services-grid">
+                <div class="service-card">
+                    <i class="fas fa-stethoscope"></i>
+                    <h3>Primary Care</h3>
+                    <p>Comprehensive primary healthcare for all ages</p>
+                </div>
+                <div class="service-card">
+                    <i class="fas fa-heartbeat"></i>
+                    <h3>Internal Medicine</h3>
+                    <p>Specialized care for adult health conditions</p>
+                </div>
+                <div class="service-card">
+                    <i class="fas fa-baby"></i>
+                    <h3>Pediatrics</h3>
+                    <p>Expert care for children and adolescents</p>
+                </div>
+                <div class="service-card">
+                    <i class="fas fa-shield-alt"></i>
+                    <h3>Preventive Medicine</h3>
+                    <p>Preventive care and health screenings</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Doctors Section -->
+    <section id="doctors" class="doctors">
+        <div class="container">
+            <h2>Meet Our Doctors</h2>
+            <div class="doctors-grid">
+                <div class="doctor-card">
+                    <div class="doctor-image">
+                        <i class="fas fa-user-md"></i>
+                    </div>
+                    <h3>Dr. Sarah Johnson</h3>
+                    <p>Internal Medicine</p>
+                    <span>Board Certified</span>
+                </div>
+                <div class="doctor-card">
+                    <div class="doctor-image">
+                        <i class="fas fa-user-md"></i>
+                    </div>
+                    <h3>Dr. Michael Chen</h3>
+                    <p>Family Medicine</p>
+                    <span>Board Certified</span>
+                </div>
+                <div class="doctor-card">
+                    <div class="doctor-image">
+                        <i class="fas fa-user-md"></i>
+                    </div>
+                    <h3>Dr. Emily Rodriguez</h3>
+                    <p>Pediatrics</p>
+                    <span>Board Certified</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section id="contact" class="contact">
+        <div class="container">
+            <h2>Contact Information</h2>
+            <div class="contact-grid">
+                <div class="contact-item">
+                    <i class="fas fa-map-marker-alt"></i>
+                    <h3>Address</h3>
+                    <p>123 Healthcare Avenue<br>Medical District, City 12345</p>
+                </div>
+                <div class="contact-item">
+                    <i class="fas fa-phone"></i>
+                    <h3>Phone</h3>
+                    <p>(555) 123-4567</p>
+                </div>
+                <div class="contact-item">
+                    <i class="fas fa-clock"></i>
+                    <h3>Hours</h3>
+                    <p>Mon-Fri: 8:00 AM - 6:00 PM<br>Sat: 9:00 AM - 2:00 PM</p>
+                </div>
+                <div class="contact-item">
+                    <i class="fas fa-envelope"></i>
+                    <h3>Email</h3>
+                    <p>info@ecaremedical.com</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Chatbot Widget -->
+    <div id="chatbot-widget" class="chatbot-widget">
+        <div class="chatbot-header">
+            <div class="chatbot-title">
+                <i class="fas fa-robot"></i>
+                <span>E-Care Assistant</span>
+                <div class="chatbot-status">
+                    <span id="chatbot-status" class="status-online">Online</span>
+                </div>
+            </div>
+            <div class="chatbot-controls">
+                <button id="minimize-btn" class="control-btn">
+                    <i class="fas fa-minus"></i>
+                </button>
+                <button id="close-btn" class="control-btn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+        
+        <div class="chatbot-messages" id="chatbot-messages">
+            <div class="message bot-message">
+                <div class="message-avatar">
+                    <i class="fas fa-robot"></i>
+                </div>
+                <div class="message-content">
+                    <p>Hello! I'm your E-Care virtual assistant. I can help you with:</p>
+                    <ul>
+                        <li>📋 Medical center information</li>
+                        <li>⏰ Office hours and location</li>
+                        <li>👨‍⚕️ Doctor information</li>
+                        <li>📅 Appointment scheduling</li>
+                        <li>💊 Prescription refills</li>
+                        <li>🏥 Health questions</li>
+                    </ul>
+                    <p>How can I assist you today?</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="chatbot-input">
+            <div class="input-container">
+                <input type="text" id="chatbot-input" placeholder="Type your message..." maxlength="500">
+                <button id="send-btn" class="send-btn">
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+            </div>
+            <div class="quick-actions">
+                <button class="quick-btn" data-message="What are your office hours?">Hours</button>
+                <button class="quick-btn" data-message="Who are your doctors?">Doctors</button>
+                <button class="quick-btn" data-message="I want to book an appointment">Book</button>
+                <button class="quick-btn" data-message="What services do you offer?">Services</button>
+            </div>
+        </div>
+        
+        <div class="chatbot-footer">
+            <small>Powered by AI • E-Care Medical Center</small>
+        </div>
+    </div>
+
+    <!-- Floating Chat Button -->
+    <button id="chat-toggle" class="chat-toggle">
+        <i class="fas fa-comments"></i>
+        <span class="notification-badge">1</span>
+    </button>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="loading-spinner">
+            <i class="fas fa-robot fa-spin"></i>
+            <p>AI is thinking...</p>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="chatbot.js"></script>
+    <script>
+        // Initialize the website
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🏥 E-Care Demo Website Loaded');
+            
+            // Smooth scrolling for navigation
+            document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+                anchor.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    const target = document.querySelector(this.getAttribute('href'));
+                    if (target) {
+                        target.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start'
+                        });
+                    }
+                });
+            });
+        });
+
+        // Open chatbot function
+        function openChatbot() {
+            const chatbot = document.getElementById('chatbot-widget');
+            const toggle = document.getElementById('chat-toggle');
+            
+            chatbot.classList.add('active');
+            toggle.style.display = 'none';
+            
+            // Focus on input
+            setTimeout(() => {
+                document.getElementById('chatbot-input').focus();
+            }, 300);
+        }
+    </script>
+</body>
+</html>
