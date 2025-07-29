@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.routers import auth, ecare, georgetown, chronic_care_bridge, anarcare
 from app.core.config import settings
+from app.core.database import db
+
 
 # Create FastAPI instance
 app = FastAPI(

@@ -1,5 +1,6 @@
 annotated-types==0.7.0
 anyio==3.7.1
+asyncpg==0.30.0
 bcrypt==4.1.2
 certifi==2025.7.14
 cffi==1.17.1
