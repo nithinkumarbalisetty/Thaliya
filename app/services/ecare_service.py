@@ -86,26 +86,6 @@ class ECareService(BaseHealthcareService):
             ]
         }
     
-    async def process_request(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process request specific to E-Care service - includes chatbot functionality
-        """
-        request_type = data.get("request_type", "general")
-        
-        # Handle chatbot requests
-        if request_type == "chatbot":
-            return await self._process_chatbot_request(data)
-        
-        # Legacy request types for backward compatibility
-        elif request_type == "patient_records":
-            return await self._process_patient_records(data)
-        elif request_type == "appointments":
-            return await self._process_appointments(data)
-        elif request_type == "prescriptions":
-            return await self._process_prescriptions(data)
-        else:
-            return await self._process_general_request(data)
-    
     # ========================================
     # CHATBOT CORE FUNCTIONALITY
     # ========================================
