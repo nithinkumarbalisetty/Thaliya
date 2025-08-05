@@ -1,10 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from pydantic import BaseModel
 from app.core.auth import get_current_service
 from app.services.service_factory import ServiceFactory
 from app.schemas.service import ChatbotRequest, ChatbotResponse
+import uuid
+from datetime import datetime
+from app.core.database import db
 
 router = APIRouter()  # Removed tags
 
+class ChatRequest(BaseModel):
+    user_query: str
+    session_token: str  # Remove default None, make it required
 
 @router.get("/health")
 async def health_check(current_service: dict = Depends(get_current_service)):
@@ -41,42 +48,66 @@ async def get_service_info(current_service: dict = Depends(get_current_service))
 # CHATBOT ENDPOINTS
 # ========================================
 
+@router.post("/chatbot/guest/session")
+async def create_guest_session():
+    """
+    Create a new guest session token for anonymous users
+    """
+    session_token = str(uuid.uuid4())
+    
+    # Optionally store session creation in database
+    await db.execute(
+        """
+        INSERT INTO guest_sessions (session_id, created_at, status)
+        VALUES ($1, $2, $3)
+        """,
+        session_token, datetime.utcnow(), "active"
+    )
+    
+    return {
+        "success": True,
+        "session_token": session_token,
+        "expires_in": 3600,  # 1 hour
+        "message": "Guest session created successfully"
+    }
+
+@router.post("/chatbot/guest")
+async def chatbot_chat_guest(request: ChatRequest):
+    """
+    Chatbot endpoint for guest users (session_token required)
+    """
+    if not request.session_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="session_token is required. Call /chatbot/guest/session first."
+        )
+    
+    ecare_service = ServiceFactory.get_service("ecare")
+    response = await ecare_service.process_guest_chat(
+        user_query=request.user_query,
+        session_token=request.session_token
+    )
+    return response
+
 @router.post("/chatbot", response_model=ChatbotResponse)
 async def chatbot_chat(
     request: ChatbotRequest,
     current_service: dict = Depends(get_current_service)
 ):
     """
-    E-Care Chatbot endpoint for conversational AI
+    E-Care Chatbot endpoint for authenticated users (JWT required).
     Handles: Appointments, RAG info, Tickets, General Q&A
     """
     if current_service["service_name"] != "ecare":
+        print(current_service["service_name"])
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied. This endpoint is only for E-Care service."
         )
-    
     try:
         service = ServiceFactory.get_service("ecare")
-        
-        # Prepare chatbot request data
-        chatbot_data = {
-            "request_type": "chatbot",
-            "message": request.message,
-            "session_id": request.session_id,
-            "user_id": request.user_id
-        }
-        
-        result = await service.process_request(chatbot_data)
-        
-        return ChatbotResponse(
-            success=result["success"],
-            session_id=result["session_id"],
-            intent=result["intent"],
-            message=result["message"],
-            data=result.get("data"),
-            timestamp=result["timestamp"]
-        )
+        result = await service.process_chat(request.dict())
+        return ChatbotResponse(**result)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -174,6 +205,7 @@ async def get_user_appointments(
             "total_appointments": len(appointments),
             "upcoming_appointments": len([a for a in appointments if a["status"] == "scheduled"])
         }
+    
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

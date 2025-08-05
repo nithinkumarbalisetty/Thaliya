@@ -1,904 +1,828 @@
-from typing import Dict, Any, List, Optional
-import re
-import json
+from typing import Dict, Any
 import uuid
-import logging
 from datetime import datetime, timedelta
 from app.services.base_service import BaseHealthcareService
 from app.services.rag_service import get_rag_service
-
-logger = logging.getLogger(__name__)
+from app.core.database import db
+from app.chatbot.core.intent_classifier import AIIntentClassifier
+import re
+import jwt
+import os
+from app.services.otp_service import SecureOTPManager
 
 class ECareService(BaseHealthcareService):
     """
-    E-Care service implementation for electronic healthcare management
+    Stateless E-Care service for chat widget integration.
     """
-    
+
     def __init__(self):
-        super().__init__("ecare")
-        # Mock databases (in production, use actual database)
-        self.conversations = {}
-        self.tickets = {}
-        self.appointments = {}
-        
-        # Initialize RAG service (production-level)
+        super().__init__("ecare") 
         self.rag_service = None
-        self._initialize_rag_service()
-        
-        # Fallback knowledge base for immediate responses
-        self.fallback_knowledge_base = self._initialize_fallback_knowledge_base()
-        self.intent_patterns = self._initialize_intent_patterns()
-        
-    def _initialize_rag_service(self):
-        """Initialize the production RAG service"""
+        self.intent_classifier = None
+        self.otp_manager = SecureOTPManager()
+
+    async def _get_intent_classifier(self):
+        """Get or initialize the AI intent classifier"""
+        if self.intent_classifier is None:
+            self.intent_classifier = AIIntentClassifier()
+            await self.intent_classifier._ensure_initialized()
+        return self.intent_classifier
+
+    async def _classify_intent_ai(self, user_query: str) -> str:
+        """
+        AI-powered intent classification using Azure OpenAI
+        """
         try:
-            # This will be set up async in the first RAG request
-            logger.info("RAG service will be initialized on first use")
+            classifier = await self._get_intent_classifier()
+            result = await classifier.classify_intent(user_query)
+            return result.get("intent", "general")
         except Exception as e:
-            logger.error(f"Failed to initialize RAG service: {str(e)}")
+            # Fallback to simple classification if AI fails
+            print(f"AI intent classification failed: {e}")
+            return self._classify_intent_simple(user_query)
+
+    def _classify_intent_simple(self, user_query: str) -> str:
+        """
+        Simple keyword-based intent classification (fallback)
+        """
+        user_query_lower = user_query.lower()
+        
+        if any(word in user_query_lower for word in ['appointment', 'book', 'schedule', 'visit']):
+            return "appointment"
+        elif any(word in user_query_lower for word in ['ticket', 'issue', 'problem', 'help', 'refill', 'prescription']):
+            return "ticket"
+        elif any(word in user_query_lower for word in ['hours', 'location', 'address', 'services', 'doctors', 'insurance']):
+            return "rag_info"
+        else:
+            return "general"
+
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Implementation of abstract method from BaseHealthcareService
+        """
+        return {
+            "status": "healthy",
+            "service": "ecare",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+    async def process_request(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Implementation of abstract method from BaseHealthcareService
+        """
+        request_type = request_data.get("request_type")
+        
+        if request_type == "chatbot":
+            return await self.process_chat(request_data)
+        elif request_type == "guest_chat":
+            return await self.process_guest_chat(
+                user_query=request_data.get("user_query"),
+                session_token=request_data.get("session_token")
+            )
+        else:
+            return {
+                "success": False,
+                "error": f"Unknown request type: {request_type}",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    async def process_guest_chat(self, user_query: str, session_token: str) -> Dict[str, Any]:
+        # 1. Validate session token first
+        session_valid = await self._validate_guest_session(session_token)
+        if not session_valid:
+            return {
+                "success": False,
+                "error": "Invalid or expired session token",
+                "error_code": "INVALID_SESSION",
+                "message": "Please create a new session by calling /chatbot/guest/session",
+                "session_token": None
+            }
+
+        # 2. Update last activity for the session
+        await self._update_session_activity(session_token)
+
+        # 3. Get current session state and auth data
+        session_data = await self._get_session_state(session_token)
+        print(  f"Session data for token {session_token}: {session_data}"   )
+        current_state = session_data.get("session_state", "general")
+        print(f"Current session state: {current_state}")
+
+        # 4. Handle different conversation states
+        if current_state == "awaiting_auth_details":
+            print("Here in awaiting_auth_details state")
+            return await self._handle_auth_step_1(user_query, session_token)
+        elif current_state == "awaiting_dob_email":
+            return await self._handle_auth_step_2(user_query, session_token, session_data)
+        elif current_state == "awaiting_otp":
+            return await self._handle_otp_verification(user_query, session_token, session_data)
+        elif current_state == "authenticated":
+            return await self._handle_authenticated_flow(user_query, session_token, session_data)
+        else:
+            # Regular chat flow - check for auth-required intents
+            return await self._handle_regular_chat(user_query, session_token)
+
+    async def _handle_regular_chat(self, user_query: str, session_token: str) -> Dict[str, Any]:
+        """Handle regular chat and trigger auth if needed"""
+        intent = await self._classify_intent_ai(user_query)
+        
+        if intent == "rag_info":
+            # No auth needed - serve immediately
+            if self.rag_service is None:
+                self.rag_service = await get_rag_service()
+            rag_result = await self.rag_service.retrieve_relevant_context(query=user_query, max_context_length=2000)
+            bot_response = rag_result.get("answer", "Sorry, I couldn't find relevant information.")
             
-    def _initialize_fallback_knowledge_base(self) -> Dict[str, str]:
-        """Initialize fallback knowledge base for immediate responses"""
-        return {
-            "office_hours": "Our office hours are Monday-Friday 8:00 AM to 6:00 PM, Saturday 9:00 AM to 2:00 PM",
-            "location": "E-Care Medical Center is located at 123 Healthcare Ave, Medical District, City 12345",
-            "services": "We offer primary care, preventive medicine, chronic disease management, vaccinations, and telemedicine consultations",
-            "doctors": "Our physicians include Dr. Sarah Johnson (Internal Medicine), Dr. Michael Chen (Family Medicine), and Dr. Emily Rodriguez (Pediatrics)",
-            "insurance": "We accept most major insurance plans including Blue Cross, Aetna, UnitedHealth, and Medicare",
-            "appointments": "Appointments can be scheduled online, by phone at (555) 123-4567, or through our patient portal",
-            "prescriptions": "Prescription refills can be requested through our patient portal or by calling our pharmacy line",
-            "emergency": "For medical emergencies, please call 911. For urgent but non-emergency care, call our after-hours line"
-        }
-        
-    def _initialize_knowledge_base(self) -> Dict[str, str]:
-        """Initialize RAG knowledge base with website information (DEPRECATED - now using RAG service)"""
-        logger.warning("Using fallback knowledge base - RAG service should be used instead")
-        return self.fallback_knowledge_base
-    
-    def _initialize_intent_patterns(self) -> Dict[str, List[str]]:
-        """Initialize intent classification patterns"""
-        return {
-            "appointment": [
-                r"\b(book|schedule|make|create|set up|arrange)\b.*\b(appointment|visit|consultation)\b",
-                r"\b(cancel|reschedule|change|modify|update)\b.*\b(appointment|visit)\b",
-                r"\bwhen\b.*\bavailable\b",
-                r"\bappointment\b.*\b(today|tomorrow|this week|next week)\b"
-            ],
-            "rag_info": [
-                r"\b(hours|open|closed|schedule)\b",
-                r"\b(location|address|where|directions)\b",
-                r"\b(services|treatments|what do you|specialties)\b",
-                r"\b(doctors|physicians|providers|staff)\b",
-                r"\b(insurance|coverage|accept|plans)\b"
-            ],
-            "ticket": [
-                r"\b(refill|prescription|medication|medicine)\b",
-                r"\b(billing|bill|invoice|payment|charge)\b",
-                r"\b(test results|lab|blood work|x-ray)\b",
-                r"\b(referral|specialist|authorization)\b",
-                r"\b(problem|issue|concern|complaint)\b"
-            ],
-            "general": [
-                r"\b(health|medical|symptoms|condition)\b",
-                r"\b(advice|recommendation|suggest|help)\b",
-                r"\bwhat\b.*\b(should|can|is|are)\b",
-                r"\bhow\b.*\b(to|do|can|should)\b"
-            ]
-        }
-    
-    # ========================================
-    # CHATBOT CORE FUNCTIONALITY
-    # ========================================
-    
-    async def _process_chatbot_request(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Main chatbot request processor
-        """
-        user_message = data.get("message", "")
-        session_id = data.get("session_id") or str(uuid.uuid4())  # Ensure we always have a session_id
-        user_id = data.get("user_id", "anonymous")
-        
-        # Initialize conversation if new
-        if session_id not in self.conversations:
-            self.conversations[session_id] = {
-                "id": session_id,
-                "user_id": user_id,
-                "messages": [],
-                "created_at": datetime.now(),
-                "last_activity": datetime.now()
+            await self._store_chat_history(session_token, user_query, bot_response, "general", intent)
+            
+            return {
+                "success": True,
+                "intent": "rag_response",
+                "output": bot_response,
+                "session_token": session_token
             }
         
-        # Add user message to conversation
-        self.conversations[session_id]["messages"].append({
-            "role": "user",
-            "content": user_message,
-            "timestamp": datetime.now()
+        elif intent in ["appointment", "ticket"]:
+            # Auth required - store original intent and start auth flow
+            await self._store_auth_temp_data(session_token, intent, user_query)
+            
+            bot_response = (
+                f"I understand you want to {intent.replace('_', ' ')}. "
+                "To proceed, I'll need to verify your identity first. "
+                "Please provide your first name and last name."
+            )
+            
+            await self._update_session_status(session_token, "awaiting_auth_details")
+            await self._store_chat_history(session_token, user_query, bot_response, "awaiting_auth_details", intent)
+            
+            return {
+                "success": True,
+                "intent": "awaiting_auth",
+                "output": bot_response,
+                "session_token": session_token,
+                "requires_auth": True,
+                "original_intent": intent
+            }
+        
+        else:
+            # General chat
+            bot_response = "I'm here to help! Please let me know your question."
+            await self._store_chat_history(session_token, user_query, bot_response, "general", intent)
+            
+            return {
+                "success": True,
+                "intent": "general",
+                "output": bot_response,
+                "session_token": session_token
+            }
+
+    async def _handle_auth_step_1(self, user_query: str, session_token: str) -> Dict[str, Any]:
+        """Handle first name and last name collection"""
+        names = self._parse_names(user_query)
+        
+        if not names:
+            bot_response = "Please provide your first name and last name (e.g., 'John Smith')"
+            await self._store_chat_history(session_token, user_query, bot_response, "awaiting_auth_details", "auth_validation", is_sensitive=True)
+            
+            return {
+                "success": True,
+                "intent": "awaiting_auth",
+                "output": bot_response,
+                "session_token": session_token,
+                "validation_error": True
+            }
+        
+        # Store names and move to next step
+        await self._update_auth_temp_data(session_token, {
+            "first_name": names["first_name"],
+            "last_name": names["last_name"]
         })
         
-        # Classify intent and route to appropriate handler
-        intent = self._classify_intent(user_message)
-        response = await self._route_to_handler(user_message, intent, session_id, user_id)
+        await self._update_session_status(session_token, "awaiting_dob_email")
         
-        # Apply guardrails
-        response = self._apply_guardrails(response, intent)
-        
-        # Add assistant response to conversation
-        self.conversations[session_id]["messages"].append({
-            "role": "assistant",
-            "content": response["message"],
-            "intent": intent,
-            "timestamp": datetime.now()
-        })
+        bot_response = f"Thanks {names['first_name']}! Now please provide your date of birth (MM/DD/YYYY) and email address."
+        await self._store_chat_history(session_token, "[Name provided]", bot_response, "awaiting_dob_email", "auth_step1", is_sensitive=True)
         
         return {
             "success": True,
-            "session_id": session_id,
-            "intent": intent,
-            "message": response["message"],
-            "data": response.get("data"),
-            "timestamp": self._get_timestamp()
+            "intent": "awaiting_dob_email",
+            "output": bot_response,
+            "session_token": session_token,
+            "collected_data": {"first_name": names["first_name"], "last_name": names["last_name"]}
         }
-    
-    def _classify_intent(self, message: str) -> str:
-        """
-        Classify user intent using pattern matching
-        """
-        message_lower = message.lower()
+
+    async def _handle_auth_step_2(self, user_query: str, session_token: str, session_data: dict) -> Dict[str, Any]:
+        """Handle DOB and email collection"""
+        auth_data = self._parse_dob_email(user_query)
         
-        # Check each intent category
-        for intent, patterns in self.intent_patterns.items():
-            for pattern in patterns:
-                if re.search(pattern, message_lower, re.IGNORECASE):
-                    return intent
-        
-        return "general"
-    
-    async def _route_to_handler(self, message: str, intent: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Route message to appropriate handler based on intent
-        """
-        if intent == "appointment":
-            return await self._handle_appointment_intent(message, session_id, user_id)
-        elif intent == "rag_info":
-            return await self._handle_rag_info_intent(message, session_id, user_id)
-        elif intent == "ticket":
-            return await self._handle_ticket_intent(message, session_id, user_id)
-        else:  # general intent
-            return await self._handle_general_intent(message, session_id, user_id)
-    
-    # ========================================
-    # HANDLER 1: APPOINTMENT MANAGEMENT
-    # ========================================
-    
-    async def _handle_appointment_intent(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Handle appointment-related requests (Future: Prognocis integration)
-        """
-        message_lower = message.lower()
-        
-        # Determine appointment action
-        if any(word in message_lower for word in ["book", "schedule", "make", "create"]):
-            return await self._book_appointment(message, session_id, user_id)
-        elif any(word in message_lower for word in ["cancel", "delete"]):
-            return await self._cancel_appointment(message, session_id, user_id)
-        elif any(word in message_lower for word in ["reschedule", "change", "modify"]):
-            return await self._reschedule_appointment(message, session_id, user_id)
-        else:
-            return await self._get_appointment_info(message, session_id, user_id)
-    
-    async def _book_appointment(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Book a new appointment (Mock implementation - integrate with Prognocis later)
-        """
-        appointment_id = str(uuid.uuid4())
-        
-        # Mock appointment creation
-        appointment = {
-            "appointment_id": appointment_id,
-            "user_id": user_id,
-            "doctor": "Dr. Sarah Johnson",
-            "date": "2025-08-05",
-            "time": "10:00 AM",
-            "status": "scheduled",
-            "type": "General Consultation",
-            "created_at": datetime.now().isoformat()
-        }
-        
-        self.appointments[appointment_id] = appointment
-        
-        return {
-            "message": f"Great! I've scheduled your appointment with Dr. Sarah Johnson for August 5th at 10:00 AM. Your appointment ID is {appointment_id[:8]}. You'll receive a confirmation email shortly.",
-            "data": {
-                "appointment": appointment,
-                "next_action": "confirmation_sent"
-            }
-        }
-    
-    async def _cancel_appointment(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Cancel an existing appointment
-        """
-        return {
-            "message": "I can help you cancel your appointment. Could you please provide your appointment ID or the date of your scheduled appointment?",
-            "data": {
-                "action_required": "appointment_id_needed",
-                "next_step": "provide_appointment_details"
-            }
-        }
-    
-    async def _reschedule_appointment(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Reschedule an existing appointment
-        """
-        return {
-            "message": "I'll help you reschedule your appointment. Please provide your current appointment ID and your preferred new date/time.",
-            "data": {
-                "action_required": "reschedule_details_needed",
-                "available_slots": ["Aug 6 - 2:00 PM", "Aug 7 - 9:00 AM", "Aug 8 - 11:00 AM"]
-            }
-        }
-    
-    async def _get_appointment_info(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Get appointment information
-        """
-        return {
-            "message": "I can help you with appointment information. You can book appointments online, call us at (555) 123-4567, or use our patient portal. Our available doctors include Dr. Sarah Johnson (Internal Medicine), Dr. Michael Chen (Family Medicine), and Dr. Emily Rodriguez (Pediatrics).",
-            "data": {
-                "contact_info": "(555) 123-4567",
-                "booking_methods": ["online", "phone", "patient_portal"],
-                "available_doctors": ["Dr. Sarah Johnson", "Dr. Michael Chen", "Dr. Emily Rodriguez"]
-            }
-        }
-    
-    # ========================================
-    # HANDLER 2: RAG-BASED INFORMATION (PRODUCTION)
-    # ========================================
-    
-    async def _handle_rag_info_intent(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Handle information requests using LangChain RAG with Azure OpenAI
-        """
-        try:
-            # Get or initialize LangChain RAG service
-            if self.rag_service is None:
-                self.rag_service = await get_rag_service()
+        if not auth_data:
+            bot_response = "Please provide your date of birth (MM/DD/YYYY) and email address (e.g., '01/15/1990 john@email.com')"
+            await self._store_chat_history(session_token, user_query, bot_response, "awaiting_dob_email", "auth_validation", is_sensitive=True)
             
-            # Use LangChain RAG to retrieve relevant context from .txt file
-            rag_result = await self.rag_service.retrieve_relevant_context(
-                query=message,
-                max_context_length=2000
+            return {
+                "success": True,
+                "intent": "awaiting_dob_email",
+                "output": bot_response,
+                "session_token": session_token,
+                "validation_error": True
+            }
+        
+        # Verify user exists in database
+        user_verification = await self._verify_user_credentials(
+            session_data["first_name"],
+            session_data["last_name"], 
+            auth_data["dob"],
+            auth_data["email"]
+        )
+        
+        if not user_verification["valid"]:
+            bot_response = "Sorry, we couldn't verify your information. Please check your details and try again."
+            await self._store_chat_history(session_token, "[DOB/Email provided]", bot_response, "awaiting_dob_email", "auth_failed", is_sensitive=True)
+            
+            return {
+                "success": True,
+                "intent": "auth_failed",
+                "output": bot_response,
+                "session_token": session_token,
+                "auth_failed": True
+            }
+        
+        # Generate and send OTP
+        otp_code = self._generate_otp()
+        print(otp_code)
+        # Update auth temp data with complete info
+        await self._update_auth_temp_data(session_token, {
+            "dob": auth_data["dob"],
+            "email": auth_data["email"],
+            "user_id": user_verification["user_id"],
+            "otp_code": otp_code,
+            "otp_expires": datetime.utcnow() + timedelta(minutes=5)
+        })
+        
+        await self._update_session_status(session_token, "awaiting_otp")
+        
+        # TODO: Send actual OTP via email
+        print(f"DEBUG: OTP for {auth_data['email']}: {otp_code}")
+        
+        bot_response = f"Verification details confirmed! We've sent a 6-digit code to {auth_data['email']}. Please enter the code to complete authentication."
+        await self._store_chat_history(session_token, "[DOB/Email provided]", bot_response, "awaiting_otp", "auth_step2", is_sensitive=True)
+        
+        return {
+            "success": True,
+            "intent": "awaiting_otp",
+            "output": bot_response,
+            "session_token": session_token
+        }
+
+    async def _handle_otp_verification(self, user_query: str, session_token: str, session_data: dict) -> Dict[str, Any]:
+        """Handle OTP verification and resume original task"""
+        otp_input = user_query.strip()
+        
+        # Verify OTP
+        if not self._verify_otp(otp_input, session_data.get("otp_code"), session_data.get("otp_expires")):
+            bot_response = "Invalid or expired code. Please enter the 6-digit code sent to your email."
+            await self._store_chat_history(session_token, "[OTP provided]", bot_response, "awaiting_otp", "otp_invalid", is_sensitive=True)
+            
+            return {
+                "success": True,
+                "intent": "awaiting_otp",
+                "output": bot_response,
+                "session_token": session_token,
+                "otp_invalid": True
+            }
+        
+        # Create authenticated user session
+        await self._create_authenticated_session(session_token, session_data["user_id"])
+        
+        # Clean up auth temp data
+        await self._cleanup_auth_temp_data(session_token)
+        
+        # Generate JWT token (don't store it)
+        jwt_token = self._generate_jwt_token({
+            "user_id": session_data["user_id"],
+            "session_id": session_token,
+            "authenticated_at": datetime.utcnow().isoformat()
+        })
+        
+        # Resume original task
+        original_intent = session_data.get("original_intent")
+        original_query = session_data.get("original_query")
+        
+        if original_intent:
+            return await self._resume_original_task(session_token, session_data, original_intent, original_query, jwt_token)
+        else:
+            bot_response = "Authentication successful! How can I help you today?"
+            await self._store_chat_history(session_token, "[OTP verified]", bot_response, "authenticated", "auth_success", is_sensitive=True)
+            
+            return {
+                "success": True,
+                "intent": "authenticated",
+                "output": bot_response,
+                "session_token": session_token,
+                "jwt_token": jwt_token,
+                "authenticated": True,
+                "user_id": session_data["user_id"]
+            }
+
+    async def _resume_original_task(self, session_token: str, session_data: dict, original_intent: str, original_query: str, jwt_token: str) -> Dict[str, Any]:
+        """Resume the original task after successful authentication"""
+        user_id = session_data["user_id"]
+        
+        if original_intent == "appointment":
+            bot_response = (
+                f"Great! Now I can help you book an appointment. "
+                f"Based on your earlier request: '{original_query}'. "
+                f"What type of appointment would you like to schedule?"
             )
             
-            # Log RAG performance for monitoring
-            logger.info(f"LangChain RAG Query: {message}")
-            logger.info(f"RAG Method: {rag_result.get('method', 'unknown')}")
-            logger.info(f"RAG Confidence: {rag_result['confidence']}")
-            logger.info(f"Sources Found: {rag_result['num_sources']}")
+            await self._update_session_status(session_token, "booking_appointment")
+            await self._store_chat_history(session_token, "Authentication completed", bot_response, "booking_appointment", "appointment")
             
-            # Check if we have a good LangChain QA response
-            if (rag_result.get('answer') and 
-                rag_result['confidence'] > 0.7 and 
-                rag_result.get('method') == 'langchain_qa'):
-                
-                # Use the LangChain-generated answer directly
-                response_message = rag_result['answer']
-                
-                # Add source attribution
-                if rag_result['sources']:
-                    response_message += "\n\n📚 Information from our medical center knowledge base."
-                
-                return {
-                    "message": response_message,
-                    "data": {
-                        "source": "langchain_azure_openai",
-                        "confidence": rag_result["confidence"],
-                        "num_sources": rag_result["num_sources"],
-                        "sources": rag_result["sources"],
-                        "type": "langchain_qa_response",
-                        "timestamp": rag_result["timestamp"],
-                        "method": rag_result.get('method')
-                    }
-                }
-            
-            # If we have context but no LLM answer, use template-based response
-            elif rag_result["context"] and rag_result["confidence"] > 0.5:
-                response_message = self._generate_template_response_from_context(message, rag_result)
-                
-                return {
-                    "message": response_message,
-                    "data": {
-                        "source": "langchain_context",
-                        "confidence": rag_result["confidence"],
-                        "num_sources": rag_result["num_sources"],
-                        "sources": rag_result["sources"],
-                        "type": "context_template_response",
-                        "timestamp": rag_result["timestamp"],
-                        "method": rag_result.get('method')
-                    }
-                }
-            
-            else:
-                # Low confidence or no context - use basic fallback
-                logger.warning(f"Low RAG confidence ({rag_result['confidence']}) for query: {message}")
-                return await self._handle_basic_fallback(message, session_id, user_id)
-                
-        except Exception as e:
-            logger.error(f"LangChain RAG service error: {str(e)}")
-            # Fallback to basic responses
-            return await self._handle_basic_fallback(message, session_id, user_id)
-    
-    def _generate_template_response_from_context(self, query: str, rag_result: Dict[str, Any]) -> str:
-        """
-        Generate response using context from LangChain document retrieval
-        """
-        context = rag_result["context"]
-        query_lower = query.lower()
-        
-        # Limit context length for readability
-        max_context_preview = 500
-        context_preview = context[:max_context_preview] + "..." if len(context) > max_context_preview else context
-        
-        # Generate response based on query intent and retrieved context
-        if any(word in query_lower for word in ["hours", "open", "time", "when", "schedule"]):
-            if any(hour_word in context.lower() for hour_word in ["monday", "tuesday", "hours", "open", "am", "pm"]):
-                return f"Here are our office hours based on our latest information:\n\n{context_preview}\n\nFor appointment scheduling, please call (555) 123-4567."
-            else:
-                return f"Based on our information:\n\n{context_preview}\n\nFor current hours and scheduling, please call (555) 123-4567."
-        
-        elif any(word in query_lower for word in ["location", "address", "where", "directions", "find"]):
-            return f"Our location and contact information:\n\n{context_preview}\n\nFor detailed directions, please call (555) 123-4567."
-        
-        elif any(word in query_lower for word in ["services", "treatment", "procedure", "medical", "care", "offer"]):
-            return f"Our medical services include:\n\n{context_preview}\n\nFor detailed information about specific services or to schedule a consultation, please call (555) 123-4567."
-        
-        elif any(word in query_lower for word in ["doctor", "doctors", "physician", "staff", "provider", "dr"]):
-            return f"Our medical team:\n\n{context_preview}\n\nTo schedule with a specific provider or learn more about our physicians, call (555) 123-4567."
-        
-        elif any(word in query_lower for word in ["insurance", "payment", "billing", "coverage", "accept", "cost"]):
-            return f"Insurance and billing information:\n\n{context_preview}\n\nFor insurance verification and billing questions, please call (555) 123-4567."
-        
-        elif any(word in query_lower for word in ["appointment", "book", "reserve", "visit"]):
-            return f"Appointment information:\n\n{context_preview}\n\nTo schedule an appointment, call (555) 123-4567 or use our online patient portal."
-        
-        elif any(word in query_lower for word in ["contact", "phone", "call", "reach"]):
-            return f"Contact information:\n\n{context_preview}\n\nOur main number is (555) 123-4567."
-        
-        else:
-            # General information response
-            return f"Based on our medical center information:\n\n{context_preview}\n\nFor more specific information, please contact our office at (555) 123-4567."
-    
-    async def _handle_basic_fallback(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Basic fallback when LangChain RAG system is not available or confident
-        """
-        message_lower = message.lower()
-        
-        # Basic pattern matching for common queries
-        if any(word in message_lower for word in ["hours", "open", "time", "when"]):
-            response = "I apologize, but I'm having trouble accessing our current hours information. Please call our office at (555) 123-4567 for the most up-to-date hours."
-        
-        elif any(word in message_lower for word in ["location", "address", "where", "directions"]):
-            response = "For our current location and address information, please call our office at (555) 123-4567."
-        
-        elif any(word in message_lower for word in ["services", "treatment", "medical", "care"]):
-            response = "For information about our medical services and treatments, please call (555) 123-4567 to speak with our staff."
-        
-        elif any(word in message_lower for word in ["appointment", "schedule", "book"]):
-            response = "To schedule an appointment, please call our office at (555) 123-4567. Our scheduling staff will be happy to help you."
-        
-        elif any(word in message_lower for word in ["doctor", "physician", "staff"]):
-            response = "For information about our physicians and medical staff, please call (555) 123-4567."
-        
-        elif any(word in message_lower for word in ["insurance", "billing", "payment"]):
-            response = "For insurance and billing questions, please call our office at (555) 123-4567."
-        
-        else:
-            response = "I'm sorry, I'm having trouble accessing that information right now. Please call our office at (555) 123-4567 for assistance with your question."
-        
-        return {
-            "message": response,
-            "data": {
-                "source": "basic_fallback",
-                "confidence": 0.3,
-                "type": "fallback_response",
-                "contact_info": "(555) 123-4567"
-            }
-        }
-    
-    async def _generate_rag_response(self, query: str, rag_result: Dict[str, Any]) -> str:
-        """
-        Generate a natural response based on RAG context
-        """
-        context = rag_result["context"]
-        confidence = rag_result["confidence"]
-        
-        # Extract key information based on query type
-        query_lower = query.lower()
-        
-        if any(word in query_lower for word in ["hours", "open", "time", "when"]):
-            return self._extract_hours_info(context)
-        elif any(word in query_lower for word in ["location", "address", "where", "directions"]):
-            return self._extract_location_info(context)
-        elif any(word in query_lower for word in ["services", "treatment", "what do you", "offer"]):
-            return self._extract_services_info(context)
-        elif any(word in query_lower for word in ["doctors", "physician", "staff", "who"]):
-            return self._extract_doctors_info(context)
-        elif any(word in query_lower for word in ["insurance", "coverage", "accept", "plans"]):
-            return self._extract_insurance_info(context)
-        elif any(word in query_lower for word in ["appointment", "schedule", "book"]):
-            return self._extract_appointment_info(context)
-        else:
-            # General response with context summary
-            context_summary = context[:400] + "..." if len(context) > 400 else context
-            return f"Based on our information: {context_summary}\n\nFor more specific details, please contact our office at (555) 123-4567."
-    
-    def _extract_hours_info(self, context: str) -> str:
-        """Extract office hours information from context"""
-        lines = context.split('\n')
-        for line in lines:
-            if any(word in line.lower() for word in ["hours", "monday", "friday", "saturday", "open"]):
-                return f"Our office hours are: {line.strip()}"
-        return "Our office hours are Monday-Friday 8:00 AM to 6:00 PM, Saturday 9:00 AM to 2:00 PM. We're closed on Sundays and major holidays."
-    
-    def _extract_location_info(self, context: str) -> str:
-        """Extract location information from context"""
-        lines = context.split('\n')
-        for line in lines:
-            if any(word in line.lower() for word in ["located", "address", "avenue", "street"]):
-                return f"E-Care Medical Center is {line.strip()}"
-        return "We're located at 123 Healthcare Avenue, Medical District, City 12345. Free parking is available on-site."
-    
-    def _extract_services_info(self, context: str) -> str:
-        """Extract services information from context"""
-        lines = context.split('\n')
-        service_lines = []
-        for line in lines:
-            if any(word in line.lower() for word in ["care", "medicine", "service", "treatment", "health"]):
-                service_lines.append(line.strip())
-        
-        if service_lines:
-            return f"We offer comprehensive medical services including: {' '.join(service_lines[:3])}"
-        return "We offer primary care, preventive medicine, chronic disease management, vaccinations, and telemedicine consultations."
-    
-    def _extract_doctors_info(self, context: str) -> str:
-        """Extract doctors information from context"""
-        lines = context.split('\n')
-        doctor_lines = []
-        for line in lines:
-            if any(word in line.lower() for word in ["dr.", "doctor", "physician", "md", "np", "pa"]):
-                doctor_lines.append(line.strip())
-        
-        if doctor_lines:
-            return f"Our medical team includes: {' '.join(doctor_lines[:3])}"
-        return "Our physicians include Dr. Sarah Johnson (Internal Medicine), Dr. Michael Chen (Family Medicine), and Dr. Emily Rodriguez (Pediatrics)."
-    
-    def _extract_insurance_info(self, context: str) -> str:
-        """Extract insurance information from context"""
-        lines = context.split('\n')
-        insurance_lines = []
-        for line in lines:
-            if any(word in line.lower() for word in ["insurance", "blue cross", "aetna", "medicare", "accept"]):
-                insurance_lines.append(line.strip())
-        
-        if insurance_lines:
-            return f"Insurance information: {' '.join(insurance_lines[:2])}"
-        return "We accept most major insurance plans including Blue Cross, Aetna, UnitedHealthcare, and Medicare. Please contact our billing department to verify your specific plan."
-    
-    def _extract_appointment_info(self, context: str) -> str:
-        """Extract appointment information from context"""
-        lines = context.split('\n')
-        for line in lines:
-            if any(word in line.lower() for word in ["appointment", "schedule", "portal", "phone"]):
-                return f"Appointment scheduling: {line.strip()}"
-        return "You can schedule appointments online through our patient portal, by calling (555) 123-4567, or using our mobile app."
-    
-    async def _handle_rag_fallback(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Fallback RAG handler using simple keyword matching
-        """
-        # Find most relevant information from fallback knowledge base
-        relevant_info = self._retrieve_relevant_info_fallback(message)
-        
-        if relevant_info:
             return {
-                "message": relevant_info["answer"],
-                "data": {
-                    "source": "fallback_kb",
-                    "confidence": relevant_info["confidence"],
-                    "type": "fallback_response"
-                }
+                "success": True,
+                "intent": "booking_appointment",
+                "output": bot_response,
+                "session_token": session_token,
+                "jwt_token": jwt_token,
+                "authenticated": True,
+                "user_id": user_id,
+                "original_intent": original_intent
             }
-        else:
+        
+        elif original_intent == "ticket":
+            ticket_type = self._extract_ticket_type(original_query)
+            
+            bot_response = (
+                f"Perfect! I can now help you with your {ticket_type} request. "
+                f"Based on your earlier message: '{original_query}'. "
+                f"Please provide more details about your issue."
+            )
+            
+            await self._update_session_status(session_token, "creating_ticket")
+            await self._store_chat_history(session_token, "Authentication completed", bot_response, "creating_ticket", "ticket")
+            
             return {
-                "message": "I don't have specific information about that. Please contact our office at (555) 123-4567 for more details, or check our website for comprehensive information.",
-                "data": {
-                    "type": "no_match_response",
-                    "contact_info": "(555) 123-4567"
-                }
+                "success": True,
+                "intent": "creating_ticket",
+                "output": bot_response,
+                "session_token": session_token,
+                "jwt_token": jwt_token,
+                "authenticated": True,
+                "user_id": user_id,
+                "original_intent": original_intent,
+                "ticket_type": ticket_type
             }
-    
-    def _retrieve_relevant_info_fallback(self, query: str) -> Optional[Dict[str, Any]]:
-        """
-        Simple keyword-based retrieval fallback (when RAG service is unavailable)
-        """
-        query_lower = query.lower()
-        
-        # Keyword matching with fallback knowledge base
-        for key, info in self.fallback_knowledge_base.items():
-            if any(keyword in query_lower for keyword in key.split('_')):
-                return {
-                    "answer": info,
-                    "source": key,
-                    "confidence": 0.8
-                }
-        
-        # Extended keyword matching
-        keyword_mappings = {
-            "hours": "office_hours",
-            "address": "location", 
-            "phone": "appointments",
-            "cost": "insurance",
-            "price": "insurance",
-            "when": "office_hours",
-            "where": "location",
-            "who": "doctors"
-        }
-        
-        for keyword, kb_key in keyword_mappings.items():
-            if keyword in query_lower and kb_key in self.fallback_knowledge_base:
-                return {
-                    "answer": self.fallback_knowledge_base[kb_key],
-                    "source": kb_key,
-                    "confidence": 0.7
-                }
-        
-        return None
-    
-    # ========================================
-    # HANDLER 3: TICKET CREATION SYSTEM
-    # ========================================
-    
-    async def _handle_ticket_intent(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Handle ticket creation for medication refills, billing, etc.
-        """
-        # Determine ticket category
-        category = self._categorize_ticket(message)
-        
-        # Create ticket
-        ticket = await self._create_ticket(message, category, session_id, user_id)
-        
-        return {
-            "message": f"I've created a ticket for your {category} request. Your ticket ID is {ticket['ticket_id'][:8]}. Our team will review and respond within 24 hours. Is there anything else I can help you with?",
-            "data": {
-                "ticket": ticket,
-                "estimated_response_time": "24 hours",
-                "category": category
-            }
-        }
-    
-    def _categorize_ticket(self, message: str) -> str:
-        """
-        Categorize ticket based on message content
-        """
-        message_lower = message.lower()
-        
-        if any(word in message_lower for word in ["refill", "prescription", "medication", "medicine"]):
-            return "prescription_refill"
-        elif any(word in message_lower for word in ["billing", "bill", "payment", "charge", "invoice"]):
-            return "billing_inquiry"
-        elif any(word in message_lower for word in ["test", "lab", "blood", "x-ray", "results"]):
-            return "test_results"
-        elif any(word in message_lower for word in ["referral", "specialist", "authorization"]):
-            return "referral_request"
-        else:
-            return "general_inquiry"
-    
-    async def _create_ticket(self, message: str, category: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Create a new support ticket
-        """
-        ticket_id = str(uuid.uuid4())
-        
-        ticket = {
-            "ticket_id": ticket_id,
-            "user_id": user_id,
-            "session_id": session_id,
-            "category": category,
-            "subject": f"{category.replace('_', ' ').title()} Request",
-            "description": message,
-            "status": "open",
-            "priority": self._determine_priority(category),
-            "assigned_to": None,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
-        }
-        
-        self.tickets[ticket_id] = ticket
-        
-        return ticket
-    
-    def _determine_priority(self, category: str) -> str:
-        """
-        Determine ticket priority based on category
-        """
-        priority_mapping = {
-            "prescription_refill": "high",
-            "test_results": "high", 
-            "billing_inquiry": "medium",
-            "referral_request": "medium",
-            "general_inquiry": "low"
-        }
-        return priority_mapping.get(category, "low")
-    
-    # ========================================
-    # HANDLER 4: GENERAL GPT RESPONSES
-    # ========================================
-    
-    async def _handle_general_intent(self, message: str, session_id: str, user_id: str) -> Dict[str, Any]:
-        """
-        Handle general health questions using GPT-like responses with guardrails
-        """
-        # Mock GPT response (integrate with OpenAI API later)
-        response = self._generate_general_response(message)
-        
-        return {
-            "message": response,
-            "data": {
-                "type": "general_response",
-                "disclaimer": "This is general information only. Please consult with your healthcare provider for medical advice.",
-                "source": "ai_assistant"
-            }
-        }
-    
-    def _generate_general_response(self, message: str) -> str:
-        """
-        Generate general health responses (Mock implementation)
-        """
-        message_lower = message.lower()
-        
-        # Common health topics with safe responses
-        if any(word in message_lower for word in ["headache", "head hurt"]):
-            return "Headaches can have various causes including stress, dehydration, or tension. Try rest, hydration, and over-the-counter pain relief if appropriate. If headaches persist or are severe, please consult your healthcare provider."
-        
-        elif any(word in message_lower for word in ["fever", "temperature"]):
-            return "A fever is your body's natural response to infection. Stay hydrated, rest, and monitor your temperature. Contact your healthcare provider if fever exceeds 103°F (39.4°C) or persists for more than 3 days."
-        
-        elif any(word in message_lower for word in ["cold", "cough", "runny nose"]):
-            return "Common cold symptoms typically resolve in 7-10 days. Rest, fluids, and over-the-counter medications can help manage symptoms. Seek medical attention if symptoms worsen or you develop difficulty breathing."
         
         else:
-            return "I understand you have a health question. While I can provide general information, it's important to consult with your healthcare provider for personalized medical advice. You can schedule an appointment through our patient portal or call (555) 123-4567."
-    
-    # ========================================
-    # GUARDRAILS AND SAFETY
-    # ========================================
-    
-    def _apply_guardrails(self, response: Dict[str, Any], intent: str) -> Dict[str, Any]:
-        """
-        Apply safety guardrails to responses
-        """
-        message = response.get("message", "")
+            bot_response = "Authentication successful! How can I help you today?"
+            await self._store_chat_history(session_token, "Authentication completed", bot_response, "authenticated", "general")
+            
+            return {
+                "success": True,
+                "intent": "authenticated",
+                "output": bot_response,
+                "session_token": session_token,
+                "jwt_token": jwt_token,
+                "authenticated": True,
+                "user_id": user_id
+            }
+
+    async def _handle_authenticated_flow(self, user_query: str, session_token: str, session_data: dict) -> Dict[str, Any]:
+        """Handle chat for already authenticated users"""
+        # Get user info from authenticated_user_sessions
+        auth_session = await self._get_authenticated_session(session_token)
         
-        # Medical disclaimer for health-related responses
-        if intent == "general" and any(word in message.lower() for word in ["pain", "symptom", "treatment", "medication"]):
-            message += "\n\n⚠️ **Medical Disclaimer**: This information is for educational purposes only and should not replace professional medical advice. Please consult your healthcare provider for medical concerns."
+        if not auth_session:
+            # Session expired, restart auth
+            await self._update_session_status(session_token, "active")
+            return await self._handle_regular_chat(user_query, session_token)
         
-        # Content filtering
-        message = self._filter_sensitive_content(message)
+        user_id = auth_session["user_id"]
+        intent = await self._classify_intent_ai(user_query)
         
-        # Length limiting
-        if len(message) > 1000:
-            message = message[:997] + "..."
-        
-        response["message"] = message
-        return response
-    
-    def _filter_sensitive_content(self, message: str) -> str:
-        """
-        Filter out sensitive or inappropriate content
-        """
-        # Basic content filtering (enhance with more sophisticated filtering)
-        sensitive_patterns = [
-            r'\b(password|ssn|social security)\b',
-            r'\b\d{3}-\d{2}-\d{4}\b',  # SSN pattern
-            r'\b\d{16}\b'  # Credit card pattern
-        ]
-        
-        for pattern in sensitive_patterns:
-            message = re.sub(pattern, "[REDACTED]", message, flags=re.IGNORECASE)
-        
-        return message
-    
-    # ========================================
-    # UTILITY METHODS
-    # ========================================
-    
-    def get_conversation_history(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get conversation history for a session
-        """
-        return self.conversations.get(session_id)
-    
-    def get_user_tickets(self, user_id: str) -> List[Dict[str, Any]]:
-        """
-        Get all tickets for a user
-        """
-        return [ticket for ticket in self.tickets.values() if ticket["user_id"] == user_id]
-    
-    def get_user_appointments(self, user_id: str) -> List[Dict[str, Any]]:
-        """
-        Get all appointments for a user
-        """
-        return [apt for apt in self.appointments.values() if apt["user_id"] == user_id]
-    
-    async def _process_patient_records(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process patient records requests
-        """
-        return {
-            "service": "ecare",
-            "type": "patient_records",
-            "records": {
-                "patient_id": data.get("patient_id", "P12345"),
-                "status": "active",
-                "last_visit": "2025-07-20",
-                "next_appointment": "2025-08-05"
-            },
-            "timestamp": self._get_timestamp(),
-            "processed_data": data
-        }
-    
-    async def _process_appointments(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process appointment requests
-        """
-        return {
-            "service": "ecare",
-            "type": "appointments",
-            "appointment": {
-                "appointment_id": "APT001",
-                "doctor": "Dr. Johnson",
-                "date": "2025-08-05",
-                "time": "10:00 AM",
-                "status": "scheduled"
-            },
-            "timestamp": self._get_timestamp(),
-            "processed_data": data
-        }
-    
-    async def _process_prescriptions(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process prescription requests
-        """
-        return {
-            "service": "ecare",
-            "type": "prescriptions",
-            "prescription": {
-                "prescription_id": "RX001",
-                "medication": "Lisinopril 10mg",
-                "dosage": "Once daily",
-                "refills": 3,
-                "status": "active"
-            },
-            "timestamp": self._get_timestamp(),
-            "processed_data": data
-        }
-    
-    # ========================================
-    # LEGACY METHODS (Backward Compatibility)
-    # ========================================
-    
-    async def _process_patient_records(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process patient records requests (Legacy)
-        """
-        return {
-            "service": "ecare",
-            "type": "patient_records",
-            "records": {
-                "patient_id": data.get("patient_id", "P12345"),
-                "status": "active",
-                "last_visit": "2025-07-20",
-                "next_appointment": "2025-08-05"
-            },
-            "timestamp": self._get_timestamp(),
-            "processed_data": data
-        }
-    
-    async def _process_appointments(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process appointment requests (Legacy)
-        """
-        return {
-            "service": "ecare",
-            "type": "appointments",
-            "appointments": {
-                "upcoming": [
-                    {
-                        "id": "A001",
-                        "date": "2025-08-05",
-                        "time": "10:00 AM",
-                        "doctor": "Dr. Sarah Johnson",
-                        "type": "General Consultation"
-                    }
-                ],
-                "available_slots": [
-                    "2025-08-06 2:00 PM",
-                    "2025-08-07 9:00 AM",
-                    "2025-08-08 11:00 AM"
-                ]
-            },
-            "timestamp": self._get_timestamp(),
-            "processed_data": data
-        }
-    
-    async def _process_prescriptions(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process prescription requests (Legacy)
-        """
-        return {
-            "service": "ecare",
-            "type": "prescriptions",
-            "prescriptions": {
-                "active": [
-                    {
-                        "medication": "Lisinopril 10mg",
-                        "dosage": "Once daily",
-                        "refills_remaining": 2,
-                        "pharmacy": "Main Street Pharmacy"
-                    }
-                ],
-                "refill_requests": "Available through patient portal"
-            },
-            "timestamp": self._get_timestamp(),
-            "processed_data": data
-        }
-    
-    async def _process_general_request(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process general requests (Legacy)
-        """
-        return {
-            "service": "ecare",
-            "type": "general",
-            "message": "Request processed by E-Care service",
-            "timestamp": self._get_timestamp(),
-            "processed_data": data
-        }
-    
-    async def health_check(self) -> Dict[str, Any]:
-        """
-        Health check for E-Care service including RAG system
-        """
-        base_health = {
-            "service": "ecare",
-            "status": "healthy",
-            "uptime": "99.8%",
-            "last_check": self._get_timestamp(),
-            "chatbot_status": "operational",
-            "active_conversations": len(self.conversations),
-            "open_tickets": len([t for t in self.tickets.values() if t["status"] == "open"])
-        }
-        
-        # Check RAG service health
-        try:
+        # Now handle as authenticated user (similar to your process_chat method)
+        if intent == "rag_info":
             if self.rag_service is None:
                 self.rag_service = await get_rag_service()
+            rag_result = await self.rag_service.retrieve_relevant_context(query=user_query, max_context_length=2000)
+            bot_response = rag_result.get("answer", "Sorry, I couldn't find relevant information.")
             
-            rag_stats = await self.rag_service.get_system_stats()
-            base_health["rag_service"] = {
-                "status": "operational" if rag_stats["system_initialized"] else "initializing",
-                "embeddings_model": rag_stats["embeddings_model"],
-                "vector_store_size": rag_stats.get("vector_store_size", 0),
-                "similarity_threshold": rag_stats["similarity_threshold"]
-            }
-        except Exception as e:
-            base_health["rag_service"] = {
-                "status": "fallback_mode",
-                "error": str(e),
-                "fallback_kb_size": len(self.fallback_knowledge_base)
+            await self._store_chat_history(session_token, user_query, bot_response, "authenticated", intent)
+            
+            return {
+                "success": True,
+                "intent": "rag_response",
+                "output": bot_response,
+                "session_token": session_token,
+                "user_id": user_id,
+                "authenticated": True
             }
         
-        return base_health
+        elif intent == "appointment":
+            booking_id = str(uuid.uuid4())
+            bot_response = f"Your appointment has been booked successfully! Booking ID: {booking_id[:8]}"
+            
+            await self._store_chat_history(session_token, user_query, bot_response, "authenticated", intent)
+            
+            return {
+                "success": True,
+                "intent": "booking",
+                "booking_id": booking_id,
+                "output": bot_response,
+                "session_token": session_token,
+                "user_id": user_id,
+                "authenticated": True
+            }
+        
+        elif intent == "ticket":
+            ticket_id = str(uuid.uuid4())
+            bot_response = f"Your support ticket has been created successfully! Ticket ID: {ticket_id[:8]}"
+            
+            await self._store_chat_history(session_token, user_query, bot_response, "authenticated", intent)
+            
+            return {
+                "success": True,
+                "intent": "ticket",
+                "ticket_id": ticket_id,
+                "output": bot_response,
+                "session_token": session_token,
+                "user_id": user_id,
+                "authenticated": True
+            }
+        
+        else:
+            bot_response = "I'm here to help! You can book appointments, create tickets, or ask any questions."
+            await self._store_chat_history(session_token, user_query, bot_response, "authenticated", intent)
+            
+            return {
+                "success": True,
+                "intent": "general",
+                "output": bot_response,
+                "session_token": session_token,
+                "user_id": user_id,
+                "authenticated": True
+            }
+
+    # Helper methods for database operations
+    async def _get_session_state(self, session_token: str) -> dict:
+        """Get session state and auth temp data"""
+        try:
+            # 1. ALWAYS get the current state from guest_sessions first (source of truth)
+            session_result = await db.fetch(
+                "SELECT status FROM guest_sessions WHERE session_id = $1",
+                session_token
+            )
+            
+            if not session_result:
+                return {"session_state": "general"}
+            
+            current_status = session_result[0]["status"]
+            
+            # 2. If we're in an auth flow, get the auth temp data as well
+            if current_status in ["awaiting_auth_details", "awaiting_dob_email", "awaiting_otp"]:
+                auth_result = await db.fetch(
+                    """
+                    SELECT original_intent, original_query, first_name, last_name, 
+                           dob, email, user_id, otp_code, otp_expires
+                    FROM guest_auth_temp 
+                    WHERE session_id = $1
+                    """,
+                    session_token
+                )
+                
+                if auth_result:
+                    # Combine auth data WITH session state
+                    auth_data = dict(auth_result[0])
+                    auth_data["session_state"] = current_status  # Add the state!
+                    return auth_data
+            
+            # 3. For non-auth states, just return the state
+            return {"session_state": current_status}
+            
+        except Exception as e:
+            print(f"Error getting session state: {e}")
+            return {"session_state": "general"}
+
+    async def _store_auth_temp_data(self, session_token: str, intent: str, user_query: str):
+        """Store original intent and query in guest_auth_temp"""
+        try:
+            # First check if record exists
+            existing = await db.fetch(
+                "SELECT session_id FROM guest_auth_temp WHERE session_id = $1",
+                session_token
+            )
+            
+            if existing:
+                # Update existing record
+                await db.execute(
+                    """
+                    UPDATE guest_auth_temp 
+                    SET original_intent = $2, original_query = $3, expires_at = CURRENT_TIMESTAMP + INTERVAL '30 minutes'
+                    WHERE session_id = $1
+                    """,
+                    session_token, intent, user_query
+                )
+            else:
+                # Insert new record
+                await db.execute(
+                    """
+                    INSERT INTO guest_auth_temp (session_id, original_intent, original_query)
+                    VALUES ($1, $2, $3)
+                    """,
+                    session_token, intent, user_query
+                )
+        except Exception as e:
+            print(f"Error storing auth temp data: {e}")
+
+    async def _update_auth_temp_data(self, session_token: str, data: dict):
+        """Update auth temp data with new information"""
+        try:
+            # Build dynamic update query based on provided data
+            set_clauses = []
+            values = [session_token]
+            param_num = 2
+            
+            for key, value in data.items():
+                set_clauses.append(f"{key} = ${param_num}")
+                values.append(value)
+                param_num += 1
+            
+            if set_clauses:
+                query = f"""
+                    UPDATE guest_auth_temp 
+                    SET {', '.join(set_clauses)}
+                    WHERE session_id = $1
+                """
+                res = await db.execute(query, *values)
+                print(query,set_clauses)
+        except Exception as e:
+            print(f"Error updating auth temp data: {e}")
+
+    async def _update_session_status(self, session_token: str, status: str):
+        """Update guest session status"""
+        try:
+            await db.execute(
+                """
+                UPDATE guest_sessions 
+                SET status = $2, last_activity = CURRENT_TIMESTAMP
+                WHERE session_id = $1
+                """,
+                session_token, status
+            )
+            print('Updating session status to:', status)
+        except Exception as e:
+            print(f"Error updating session status: {e}")
+
+    async def _create_authenticated_session(self, session_token: str, user_id: int):
+        """Create authenticated user session"""
+        try:
+            await db.execute(
+                """
+                INSERT INTO authenticated_user_sessions (session_id, user_id, authenticated_at)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (session_id) DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
+                    authenticated_at = EXCLUDED.authenticated_at,
+                    last_activity = CURRENT_TIMESTAMP
+                """,
+                session_token, user_id, datetime.utcnow()
+            )
+            
+            # Update guest session status
+            await self._update_session_status(session_token, "authenticated")
+            
+        except Exception as e:
+            print(f"Error creating authenticated session: {e}")
+
+    async def _get_authenticated_session(self, session_token: str) -> dict:
+        """Get authenticated session info"""
+        try:
+            result = await db.fetch(
+                """
+                SELECT user_id, authenticated_at, last_activity
+                FROM authenticated_user_sessions 
+                WHERE session_id = $1
+                """,
+                session_token
+            )
+            
+            return dict(result[0]) if result else None
+            
+        except Exception as e:
+            print(f"Error getting authenticated session: {e}")
+            return None
+
+    async def _cleanup_auth_temp_data(self, session_token: str):
+        """Clean up temporary auth data after successful authentication"""
+        try:
+            await db.execute(
+                "DELETE FROM guest_auth_temp WHERE session_id = $1",
+                session_token
+            )
+        except Exception as e:
+            print(f"Error cleaning up auth temp data: {e}")
+
+    async def _store_chat_history(self, session_token: str, user_query: str, bot_response: str, 
+                                 session_state: str, intent: str, is_sensitive: bool = False):
+        """Store chat with sensitivity flag"""
+        try:
+            await db.execute(
+                """
+                INSERT INTO guest_chat_history 
+                (session_id, user_query, bot_response, session_state, intent, is_sensitive, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                session_token, user_query, bot_response, session_state, intent, is_sensitive, datetime.utcnow()
+            )
+        except Exception as e:
+            print(f"Error storing chat history: {e}")
+
+    # Validation and parsing methods
+    def _parse_names(self, user_input: str) -> dict:
+        """Parse first and last name from user input"""
+        # Simple parsing - you can enhance this
+        words = user_input.strip().split()
+        if len(words) >= 2:
+            return {
+                "first_name": words[0].capitalize(),
+                "last_name": " ".join(words[1:]).capitalize()
+            }
+        return None
+
+    def _parse_dob_email(self, user_input: str) -> dict:
+        """Parse date of birth and email from user input"""
+        # Look for date pattern (MM/DD/YYYY or MM-DD-YYYY)
+        date_pattern = r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})'
+        email_pattern = r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'
+        
+        date_match = re.search(date_pattern, user_input)
+        email_match = re.search(email_pattern, user_input)
+        
+        if date_match and email_match:
+            date_str = date_match.group(1)
+            
+            # Convert date string to proper date object
+            try:
+                # Handle both MM/DD/YYYY and MM-DD-YYYY formats
+                date_str = date_str.replace('-', '/')
+                dob_date = datetime.strptime(date_str, '%m/%d/%Y').date()
+                
+                return {
+                    "dob": dob_date,  # Now it's a proper date object
+                    "email": email_match.group(1)
+                }
+            except ValueError as e:
+                print(f"Error parsing date {date_str}: {e}")
+                return None
+        
+        return None
+
+    async def _verify_user_credentials(self, first_name: str, last_name: str, dob: str, email: str) -> dict:
+        """Verify user exists in the database"""
+        try:
+            # TODO: Implement actual user verification against your users table
+            # For now, return a mock verification
+            return {
+                "valid": True,
+                "user_id": 12345  # Mock user ID
+            }
+        except Exception as e:
+            print(f"Error verifying user credentials: {e}")
+            return {"valid": False}
+
+    def _generate_otp(self) -> str:
+        """Generate 6-digit OTP"""
+        import random
+        return str(random.randint(100000, 999999))
+
+    def _verify_otp(self, user_otp: str, stored_otp: str, expires_at: datetime) -> bool:
+        """Verify OTP code and expiration"""
+        if not user_otp or not stored_otp:
+            return False
+        
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        
+        if datetime.utcnow() > expires_at:
+            return False
+        
+        return user_otp.strip() == stored_otp
+
+    def _generate_jwt_token(self, payload: dict) -> str:
+        """Generate JWT token"""
+        try:
+            secret_key = os.getenv("JWT_SECRET_KEY", "your-secret-key")
+            
+            # Add expiration if not present
+            if "exp" not in payload:
+                payload["exp"] = datetime.utcnow() + timedelta(hours=24)
+            
+            return jwt.encode(payload, secret_key, algorithm="HS256")
+        except Exception as e:
+            print(f"Error generating JWT: {e}")
+            return None
+
+    def _extract_ticket_type(self, original_query: str) -> str:
+        """Extract the type of ticket from the original query"""
+        query_lower = original_query.lower()
+        
+        if any(word in query_lower for word in ['prescription', 'refill', 'medication']):
+            return "prescription_refill"
+        elif any(word in query_lower for word in ['billing', 'bill', 'payment', 'insurance']):
+            return "billing"
+        elif any(word in query_lower for word in ['result', 'lab', 'test']):
+            return "lab_results"
+        elif any(word in query_lower for word in ['referral', 'specialist']):
+            return "referral"
+        else:
+            return "general_support"
+
+    # Keep your existing methods
+    async def process_chat(self, chatbot_data: dict) -> Dict[str, Any]:
+        # Your existing authenticated flow
+        user_query = chatbot_data.get("message")
+        session_token = chatbot_data.get("session_id")
+        user_id = chatbot_data.get("user_id")
+
+        intent = await self._classify_intent_ai(user_query)
+
+        if intent == "rag_info":
+            if self.rag_service is None:
+                self.rag_service = await get_rag_service()
+            rag_result = await self.rag_service.retrieve_relevant_context(query=user_query, max_context_length=2000)
+            bot_response = rag_result.get("answer", "Sorry, I couldn't find relevant information.")
+            response_json = {
+                "success": True,
+                "intent": "rag_response",
+                "message": bot_response,
+                "session_id": session_token,
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        elif intent == "appointment":
+            booking_id = str(uuid.uuid4())
+            bot_response = f"Your appointment has been booked. Booking ID: {booking_id[:8]}"
+            response_json = {
+                "success": True,
+                "intent": "booking",
+                "booking_id": booking_id,
+                "message": bot_response,
+                "session_id": session_token,
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        elif intent == "ticket":
+            ticket_id = str(uuid.uuid4())
+            bot_response = f"Your ticket has been created. Ticket ID: {ticket_id[:8]}"
+            response_json = {
+                "success": True,
+                "intent": "ticket",
+                "ticket_id": ticket_id,
+                "message": bot_response,
+                "session_id": session_token,
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            bot_response = "I'm here to help! Please let me know your question."
+            response_json = {
+                "success": True,
+                "intent": "general",
+                "message": bot_response,
+                "session_id": session_token,
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+        return response_json
+
+    async def _validate_guest_session(self, session_token: str) -> bool:
+        """Validate if the guest session token is valid and not expired"""
+        try:
+            result = await db.fetch(
+                """
+                SELECT COUNT(*) as count FROM guest_sessions 
+                WHERE session_id = $1 
+                AND status IN ('active', 'awaiting_auth_details', 'awaiting_dob_email', 'awaiting_otp', 'authenticated')
+                AND expires_at > CURRENT_TIMESTAMP
+                """,
+                session_token
+            )
+            count = result[0]['count'] if result else 0
+            return count > 0
+        except Exception as e:
+            print(f"Session validation error: {e}")
+            return False
+
+    async def _update_session_activity(self, session_token: str):
+        """Update the last activity timestamp for the session"""
+        try:
+            await db.execute(
+                """
+                UPDATE guest_sessions 
+                SET last_activity = CURRENT_TIMESTAMP 
+                WHERE session_id = $1
+                """,
+                session_token
+            )
+        except Exception as e:
+            print(f"Failed to update session activity: {e}")

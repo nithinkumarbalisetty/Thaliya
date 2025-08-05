@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from app.routers import auth, ecare, georgetown, chronic_care_bridge, anarcare
+from app.routers import auth, ecare, georgetown, chronic_care_bridge, anarcare, otp_router
 from app.core.config import settings
 from app.core.database import db
 
@@ -26,6 +26,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router, prefix="/auth", tags=["authentication"])
+app.include_router(otp_router.router, tags=["OTP Authentication"])
 app.include_router(ecare.router, prefix="/api/v1/ecare", tags=["E-Care"])
 app.include_router(georgetown.router, prefix="/api/v1/georgetown", tags=["GeorgeTown"])
 app.include_router(chronic_care_bridge.router, prefix="/api/v1/chronic-care-bridge", tags=["ChronicCareBridge"])
@@ -44,6 +45,17 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "Thaliya"}
+
+# Database connection events
+@app.on_event("startup")
+async def startup():
+    await db.connect()
+    print("Database connected successfully")
+
+@app.on_event("shutdown")
+async def shutdown():
+    await db.disconnect()
+    print("Database disconnected")
 
 if __name__ == "__main__":
     uvicorn.run(

@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Environment configuration
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv('env.example')  # Load from .env.example if exists
 
 # LangChain imports
 from langchain.text_splitter import RecursiveCharacterTextSplitter

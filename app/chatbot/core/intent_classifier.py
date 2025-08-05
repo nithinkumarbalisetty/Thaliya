@@ -14,7 +14,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.schema import HumanMessage, SystemMessage
 
 # Load environment variables
-load_dotenv()
+load_dotenv('.env.example')  # Load from .env.example if exists
 
 logger = logging.getLogger(__name__)
 
@@ -138,95 +138,78 @@ SPECIAL CASES:
 
 Respond with ONLY the intent name: rag_info, appointment, ticket, or general"""
 
-        human_message = "Classify this message: {user_message}"
+        human_message = "Classify this user message: {user_query}"
         
         return ChatPromptTemplate.from_messages([
             ("system", system_message),
             ("human", human_message)
         ])
     
-    async def classify_intent(self, message: str) -> str:
+    async def classify_intent(self, user_query: str) -> Dict[str, Any]:
         """
-        Classify user intent using AI
-        
-        Args:
-            message: User message to classify
-            
-        Returns:
-            Intent classification: 'rag_info', 'appointment', 'ticket', or 'general'
+        Classify the intent of a user query
         """
         await self._ensure_initialized()
         
         if not self._initialized:
-            logger.warning("AI classifier not available, falling back to pattern matching")
-            return self._fallback_classification(message)
+            # Fallback to simple classification if Azure OpenAI not available
+            intent = self._classify_intent_simple(user_query)
+            return {
+                "intent": intent,
+                "confidence": 0.5,
+                "method": "fallback"
+            }
         
         try:
             # Create the prompt
             prompt = self._create_classification_prompt()
             
             # Format intent definitions for the prompt
-            intent_definitions_text = ""
-            for intent, details in self.intent_definitions.items():
-                intent_definitions_text += f"\n{intent.upper()}:\n"
-                intent_definitions_text += f"- {details['description']}\n"
-                intent_definitions_text += f"- Examples: {', '.join(details['examples'][:3])}\n"
-            
-            # Get AI classification
-            formatted_prompt = prompt.format(
-                intent_definitions=intent_definitions_text,
-                user_message=message
-            )
-            
-            response = await self.llm.ainvoke([
-                SystemMessage(content=formatted_prompt.split("Human: ")[0].replace("System: ", "")),
-                HumanMessage(content=f"Classify this message: {message}")
+            intent_text = "\n".join([
+                f"- {intent}: {details['description']}"
+                for intent, details in self.intent_definitions.items()
             ])
             
-            # Extract and validate the intent
-            predicted_intent = response.content.strip().lower()
+            # Create messages
+            formatted_prompt = prompt.format_messages(
+                intent_definitions=intent_text,
+                user_query=user_query
+            )
             
-            # Ensure the response is a valid intent
-            valid_intents = list(self.intent_definitions.keys())
-            if predicted_intent in valid_intents:
-                logger.info(f"AI classified '{message}' as '{predicted_intent}'")
-                return predicted_intent
-            else:
-                logger.warning(f"AI returned invalid intent '{predicted_intent}', using general")
-                return "general"
-                
+            # Get response from Azure OpenAI
+            response = await self.llm.ainvoke(formatted_prompt)
+            intent = response.content.strip().lower()
+            
+            # Validate the intent
+            if intent not in self.intent_definitions:
+                intent = "general"
+            
+            return {
+                "intent": intent,
+                "confidence": 0.9,
+                "method": "ai"
+            }
+            
         except Exception as e:
-            logger.error(f"AI intent classification failed: {str(e)}")
-            return self._fallback_classification(message)
-    
-    def _fallback_classification(self, message: str) -> str:
-        """
-        Fallback classification using simple keyword matching
-        """
-        message_lower = message.lower()
+            logger.error(f"AI intent classification failed: {e}")
+            # Fallback to simple classification
+            intent = self._classify_intent_simple(user_query)
+            return {
+                "intent": intent,
+                "confidence": 0.5,
+                "method": "fallback"
+            }
+
+    def _classify_intent_simple(self, user_query: str) -> str:
+        """Simple keyword-based fallback classification"""
+        user_query_lower = user_query.lower()
         
-        # Appointment keywords
-        if any(word in message_lower for word in [
-            "book", "schedule", "make appointment", "cancel appointment", 
-            "reschedule", "i want to see", "i need to see", "appointment with"
-        ]):
+        if any(word in user_query_lower for word in ['appointment', 'book', 'schedule', 'visit']):
             return "appointment"
-        
-        # Information keywords
-        elif any(word in message_lower for word in [
-            "what are", "what is", "when are", "where is", "who are", 
-            "hours", "services", "doctors", "insurance", "location", "address"
-        ]):
-            return "rag_info"
-        
-        # Ticket keywords
-        elif any(word in message_lower for word in [
-            "prescription", "refill", "billing", "bill", "results", 
-            "lab", "referral", "portal", "login"
-        ]):
+        elif any(word in user_query_lower for word in ['ticket', 'issue', 'problem', 'help', 'refill', 'prescription']):
             return "ticket"
-        
-        # Default to general
+        elif any(word in user_query_lower for word in ['hours', 'location', 'address', 'services', 'doctors', 'insurance']):
+            return "rag_info"
         else:
             return "general"
 
