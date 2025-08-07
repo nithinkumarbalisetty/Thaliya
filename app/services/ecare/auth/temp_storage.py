@@ -212,3 +212,161 @@ class TempStorageManager:
         except Exception as e:
             print(f"[ERROR] Failed to cleanup existing temp records: {e}")
             db.rollback()
+
+    async def update_auth_temp_with_dob(self, session_token: str, parsed_data: Dict[str, Any]) -> None:
+        """Update auth temp record with DOB and contact info"""
+        try:
+            from app.core.database import db
+            
+            print(f"DEBUG: Updating auth temp with DOB for session: {session_token}")
+            print(f"DEBUG: Parsed data: {parsed_data}")
+            
+            # Reset fields that might be stale from previous attempts
+            update_result = await db.execute(
+                """
+                UPDATE guest_auth_temp 
+                SET dob = $2, email = $3, phone = $4, user_id = NULL, 
+                    preferred_otp_channel = NULL, otp_attempts = 0, last_otp_sent = NULL
+                WHERE session_id = $1
+                """,
+                session_token, 
+                parsed_data["dob"],
+                parsed_data.get("email"),
+                parsed_data.get("phone_number")
+            )
+            print(f"DEBUG: Update result: {update_result}")
+            
+        except Exception as e:
+            print(f"ERROR: Error updating auth temp with DOB: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def update_auth_temp_with_user_id(self, session_token: str, user_id: int, contact_method: str) -> None:
+        """Update auth temp record with verified user ID"""
+        try:
+            from app.core.database import db
+            
+            print(f"DEBUG: Updating auth temp with user_id for session: {session_token}")
+            print(f"DEBUG: user_id: {user_id}, contact_method: {contact_method}")
+            
+            channel = "email" if "@" in contact_method else "sms"
+            
+            update_result = await db.execute(
+                """
+                UPDATE guest_auth_temp 
+                SET user_id = $2, preferred_otp_channel = $3, last_otp_sent = CURRENT_TIMESTAMP
+                WHERE session_id = $1
+                """,
+                session_token, user_id, channel
+            )
+            print(f"DEBUG: Update result: {update_result}")
+            
+        except Exception as e:
+            print(f"ERROR: Error updating auth temp with user_id: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def create_auth_temp_record(self, session_token: str, names: Dict[str, str]) -> None:
+        """Create initial record in guest_auth_temp table - matches original auth_handler method"""
+        try:
+            from app.core.database import db
+            
+            print(f"DEBUG: About to create auth temp record for session: {session_token}")
+            print(f"DEBUG: Names: {names}")
+            
+            # First, delete any existing record to ensure clean start
+            delete_result = await db.execute(
+                "DELETE FROM guest_auth_temp WHERE session_id = $1",
+                session_token
+            )
+            print(f"DEBUG: Deleted {delete_result} existing records")
+            
+            # Insert fresh auth temp record
+            insert_result = await db.execute(
+                """
+                INSERT INTO guest_auth_temp (
+                    session_id, first_name, last_name, created_at, expires_at
+                ) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '1 hour')
+                """,
+                session_token, names["first_name"], names["last_name"]
+            )
+            print(f"DEBUG: Insert result: {insert_result}")
+            
+            print(f"DEBUG: Successfully created auth temp record for {names['first_name']} {names['last_name']}")
+            
+        except Exception as e:
+            print(f"ERROR: Failed to create auth temp record: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    async def get_auth_temp_data(self, session_token: str) -> Dict[str, Any]:
+        """Get auth temp data from the guest_auth_temp table - matches original auth_handler method"""
+        try:
+            from app.core.database import db
+            
+            print(f"DEBUG: Getting auth temp data for session: {session_token}")
+            
+            result = await db.fetch(
+                """
+                SELECT session_id, original_intent, original_query, first_name, last_name, 
+                       dob, email, phone, user_id, preferred_otp_channel, otp_attempts,
+                       created_at, expires_at
+                FROM guest_auth_temp 
+                WHERE session_id = $1 AND expires_at > CURRENT_TIMESTAMP
+                """,
+                session_token
+            )
+            
+            print(f"DEBUG: Query result: {result}")
+            
+            if result:
+                auth_data = dict(result[0])
+                # Map phone back to phone_number for consistency
+                if auth_data.get("phone"):
+                    auth_data["phone_number"] = auth_data["phone"]
+                print(f"DEBUG: Retrieved auth data: {auth_data}")
+                return auth_data
+            else:
+                print(f"DEBUG: No auth temp data found for session {session_token}")
+                return None
+            
+        except Exception as e:
+            print(f"ERROR: Error getting auth temp data: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    async def update_auth_temp_with_contact_info(self, session_token: str, contact_method: str, is_new_user: bool, user_id: int) -> bool:
+        """
+        Update auth temp data with contact information and user status
+        """
+        try:
+            from app.core.database import db
+            
+            # Extract email and phone from contact_method
+            email = contact_method if "@" in contact_method else None
+            phone = contact_method if "@" not in contact_method else None
+            
+            # Update the record with contact information and user status
+            update_result = await db.execute(
+                """
+                UPDATE auth_temp 
+                SET email = $1, phone = $2, is_new_user = $3, user_id = $4
+                WHERE session_token = $5
+                """,
+                email, phone, is_new_user, user_id, session_token
+            )
+            
+            if update_result:
+                print(f"[DEBUG] Updated auth temp with contact info for session: {session_token}")
+                return True
+            else:
+                print(f"[WARNING] No auth temp record found to update for session: {session_token}")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to update auth temp with contact info: {e}")
+            import traceback
+            traceback.print_exc()
+            return False

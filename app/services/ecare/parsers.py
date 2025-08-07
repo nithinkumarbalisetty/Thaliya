@@ -63,6 +63,50 @@ class ECareDataParsers:
         
         return None
 
+    def parse_dob_phone(self, user_input: str) -> Optional[Dict[str, Any]]:
+        """Parse date of birth and phone number from user input - Phone is required for healthcare"""
+        # Look for date pattern (MM/DD/YYYY or MM-DD-YYYY)
+        date_pattern = r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})'
+        email_pattern = r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'
+        # Phone pattern: supports various formats like (123) 456-7890, 123-456-7890, 1234567890
+        phone_pattern = r'(\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})'
+        
+        date_match = re.search(date_pattern, user_input)
+        email_match = re.search(email_pattern, user_input)
+        phone_match = re.search(phone_pattern, user_input)
+        
+        # Require both date and phone for healthcare
+        if date_match and phone_match:
+            date_str = date_match.group(1)
+            
+            # Convert date string to proper date object
+            try:
+                # Handle both MM/DD/YYYY and MM-DD-YYYY formats
+                date_str = date_str.replace('-', '/')
+                dob_date = datetime.strptime(date_str, '%m/%d/%Y').date()
+                
+                result = {
+                    "dob": dob_date,  # Now it's a proper date object
+                }
+                
+                # Phone is required
+                if phone_match:
+                    # Clean up phone number (remove non-digits)
+                    phone = re.sub(r'[^\d]', '', phone_match.group(1))
+                    result["phone_number"] = phone
+                
+                # Email is optional
+                if email_match:
+                    result["email"] = email_match.group(1)
+                
+                return result
+                
+            except ValueError as e:
+                print(f"Error parsing date {date_str}: {e}")
+                return None
+        
+        return None
+
     def extract_ticket_type(self, original_query: str) -> str:
         """Extract the type of ticket from the original query"""
         query_lower = original_query.lower()

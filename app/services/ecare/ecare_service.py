@@ -7,7 +7,7 @@ from typing import Dict, Any
 from datetime import datetime
 from app.services.base_service import BaseHealthcareService
 from .session_manager import ECareSessionManager
-from .auth_handler import ECareAuthHandler
+from .auth.core_handler import ECareAuthHandler  # Use modular auth system
 from .chat_handler import ECareChatHandler
 
 
