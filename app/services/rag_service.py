@@ -9,9 +9,9 @@ from pathlib import Path
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-# Environment configuration
+# Environment configuration - Load from .env.example
 from dotenv import load_dotenv
-load_dotenv('env.example')  # Load from .env.example if exists
+load_dotenv('.env.example')  # Load from .env.example file
 
 # LangChain imports
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -66,14 +66,24 @@ class ProductionRAGService:
         self.chunk_overlap = chunk_overlap
         self.use_azure_openai = use_azure_openai
         
-        # Azure OpenAI configuration
+        # Azure OpenAI configuration from .env.example file
         self.azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         self.azure_embeddings_endpoint = os.getenv("AZURE_OPENAI_EMBEDDINGS_ENDPOINT")
         self.azure_api_key = os.getenv("AZURE_OPENAI_API_KEY")
         self.azure_embeddings_api_key = os.getenv("AZURE_OPENAI_EMBEDDINGS_API_KEY")
-        self.azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
-        self.azure_deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4")
-        self.azure_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-ada-002")
+        self.azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION")
+        self.azure_deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+        self.azure_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
+        
+        # Debug: Print configuration from .env.example
+        # print(f"RAG Debug - Loading from .env.example")
+        # print(f"RAG Debug - Endpoint: {self.azure_endpoint}")
+        # print(f"RAG Debug - Embeddings Endpoint: {self.azure_embeddings_endpoint}")
+        # print(f"RAG Debug - API Version: {self.azure_api_version}")
+        # print(f"RAG Debug - Deployment: {self.azure_deployment_name}")
+        # print(f"RAG Debug - Embedding Deployment: {self.azure_embedding_deployment}")
+        # print(f"RAG Debug - Has API Key: {(self.azure_api_key)}")
+        # print(f"RAG Debug - Has Embeddings API Key: {(self.azure_embeddings_api_key)}")
         
         # Initialize components
         self.embeddings = None

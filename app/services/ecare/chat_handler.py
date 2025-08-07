@@ -62,10 +62,15 @@ class ECareChatHandler:
             if self.rag_service is None:
                 self.rag_service = await get_rag_service()
             
-            rag_result = await self.rag_service.retrieve_relevant_context(
-                query=user_query, max_context_length=2000
-            )
-            bot_response = rag_result.get("answer", "Sorry, I couldn't find relevant information.")
+            try:
+                rag_result = await self.rag_service.retrieve_relevant_context(
+                    query=user_query, max_context_length=2000
+                )
+                bot_response = rag_result.get("answer", "Sorry, I couldn't find relevant information.")
+            except Exception as e:
+                print(f"RAG service error: {e}")
+                # Fallback response for general healthcare questions
+                bot_response = self._get_fallback_response(user_query)
             
             await self.session_manager.store_chat_history(
                 session_token, user_query, bot_response, "general", intent
@@ -278,3 +283,31 @@ class ECareChatHandler:
         except Exception as e:
             print(f"Error creating support ticket: {e}")
             return {"success": False, "error": str(e)}
+
+    def _get_fallback_response(self, user_query: str) -> str:
+        """Provide fallback responses when RAG service is unavailable"""
+        query_lower = user_query.lower()
+        
+        # Common healthcare questions with static responses
+        if any(word in query_lower for word in ['hours', 'time', 'open', 'close']):
+            return "Our office hours are Monday through Friday, 8:00 AM to 6:00 PM. We're closed on weekends and holidays."
+        
+        elif any(word in query_lower for word in ['location', 'address', 'where']):
+            return "We're located at 123 Healthcare Drive, Medical City, State 12345. We have convenient parking available."
+        
+        elif any(word in query_lower for word in ['appointment', 'schedule', 'book']):
+            return "To schedule an appointment, please call us at (555) 123-4567 or use our online booking system. I can also help you if you complete authentication first."
+        
+        elif any(word in query_lower for word in ['insurance', 'cost', 'price', 'payment']):
+            return "We accept most major insurance plans. For specific coverage questions, please contact our billing department at (555) 123-4568."
+        
+        elif any(word in query_lower for word in ['emergency', 'urgent']):
+            return "For medical emergencies, please call 911 immediately. For urgent care needs, visit our urgent care center or call (555) 123-URGENT."
+        
+        elif any(word in query_lower for word in ['covid', 'vaccine', 'vaccination']):
+            return "We offer COVID-19 vaccinations and testing. Please call (555) 123-4567 to schedule your vaccination appointment."
+        
+        else:
+            return ("I'm here to help with your healthcare needs! I can provide information about our services, "
+                   "hours, location, and help you schedule appointments. For specific medical questions, "
+                   "please consult with our healthcare providers directly.")
