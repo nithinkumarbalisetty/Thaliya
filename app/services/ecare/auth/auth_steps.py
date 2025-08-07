@@ -155,7 +155,7 @@ class AuthStepsHandler:
         
         if is_new_user:
             bot_response = (
-                f"Great! We'll create your account after verification. A 6-digit verification code has been sent to {phone_number}.\n"
+                f"Great! We'll create your profile after verification. A 6-digit verification code has been sent to {phone_number}.\n"
                 f"⚠️ Important: You have only 1 attempt to enter the correct code.\n"
                 f"Please enter the code carefully to complete your registration and authentication."
             )
@@ -252,19 +252,12 @@ class AuthStepsHandler:
         # Clean up auth temp data
         await self.auth_handler.session_manager.cleanup_auth_temp_data(session_token)
         
-        # Generate JWT token
-        jwt_token = self.auth_handler.jwt_ops.generate_token({
-            "user_id": user_id,
-            "session_id": session_token,
-            "authenticated_at": datetime.utcnow().isoformat()
-        })
-        
         # Resume original task
         original_intent = auth_temp_data.get("original_intent")
         original_query = auth_temp_data.get("original_query")
         
         if original_intent:
-            return await self._resume_original_task(session_token, auth_temp_data, original_intent, original_query, jwt_token, user_id)
+            return await self._resume_original_task(session_token, auth_temp_data, original_intent, original_query, user_id)
         else:
             # Customize success message based on whether user was just created
             if user_created:
@@ -281,7 +274,6 @@ class AuthStepsHandler:
                 "intent": "authenticated",
                 "output": bot_response,
                 "session_token": session_token,
-                "jwt_token": jwt_token,
                 "authenticated": True,
                 "user_id": user_id,
                 "user_created": user_created
@@ -294,7 +286,7 @@ class AuthStepsHandler:
             bot_response = (
                 f"🚫 You've reached the maximum number of verification attempts for this session. "
                 f"For security, please wait {retry_minutes} minutes before trying again.\n\n"
-                f"This helps protect your account from unauthorized access attempts.\n\n"
+                f"This helps protect your profile from unauthorized access attempts.\n\n"
                 f"Alternative options:\n"
                 f"• Wait {retry_minutes} minutes and try again\n"
                 f"• Contact support for immediate assistance"
@@ -505,7 +497,7 @@ class AuthStepsHandler:
             }
 
     async def _resume_original_task(self, session_token: str, session_data: Dict[str, Any], 
-                                  original_intent: str, original_query: str, jwt_token: str, user_id: int) -> Dict[str, Any]:
+                                  original_intent: str, original_query: str, user_id: int) -> Dict[str, Any]:
         """Resume the original task after successful authentication"""
         
         if original_intent == "appointment":
@@ -525,7 +517,6 @@ class AuthStepsHandler:
                 "intent": "booking_appointment",
                 "output": bot_response,
                 "session_token": session_token,
-                "jwt_token": jwt_token,
                 "authenticated": True,
                 "user_id": user_id,
                 "original_intent": original_intent
@@ -550,7 +541,6 @@ class AuthStepsHandler:
                 "intent": "creating_ticket",
                 "output": bot_response,
                 "session_token": session_token,
-                "jwt_token": jwt_token,
                 "authenticated": True,
                 "user_id": user_id,
                 "original_intent": original_intent,
@@ -568,7 +558,6 @@ class AuthStepsHandler:
                 "intent": "authenticated",
                 "output": bot_response,
                 "session_token": session_token,
-                "jwt_token": jwt_token,
                 "authenticated": True,
                 "user_id": user_id
             }

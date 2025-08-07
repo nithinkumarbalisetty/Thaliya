@@ -13,14 +13,12 @@ The authentication system has been successfully refactored from a monolithic 100
 - **`auth_steps.py`** - Manages the multi-step authentication workflow
 - **`otp_operations.py`** - Handles OTP generation, verification, and delivery
 - **`rate_limiting.py`** - Manages rate limiting for authentication operations
-- **`jwt_operations.py`** - JWT token creation, validation, and management
 - **`database_operations.py`** - Database operations for user and session management
 - **`temp_storage.py`** - Temporary authentication data storage
 
 ### Existing Components (Reused)
 - **`auth_utils.py`** - Cryptographic utilities and helpers
 - **`rate_limiter.py`** - Rate limiting implementation
-- **`jwt_manager.py`** - JWT management utilities
 
 ## Benefits
 
@@ -59,7 +57,6 @@ otp_result = await auth_handler.otp_ops.generate_and_store_otp_distributed(
     session_token, user_id, contact_method
 )
 
-jwt_token = auth_handler.jwt_ops.generate_token(payload)
 rate_limit = await auth_handler.rate_limiting.check_otp_rate_limit(contact, type)
 ```
 
@@ -71,12 +68,10 @@ app/services/ecare/auth/
 ├── auth_steps.py            # Multi-step authentication workflow
 ├── otp_operations.py        # OTP generation and verification
 ├── rate_limiting.py         # Rate limiting management
-├── jwt_operations.py        # JWT token operations
 ├── database_operations.py   # Database operations
 ├── temp_storage.py          # Temporary data storage
 ├── auth_utils.py           # Cryptographic utilities (existing)
-├── rate_limiter.py         # Rate limiting implementation (existing)
-└── jwt_manager.py          # JWT management (existing)
+└── rate_limiter.py         # Rate limiting implementation (existing)
 ```
 
 ## Migration Path

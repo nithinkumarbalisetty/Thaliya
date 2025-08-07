@@ -16,13 +16,11 @@ from .auth_steps import AuthStepsHandler
 from .otp_operations import OTPOperationsHandler
 from .rate_limiting import RateLimitingHandler
 from .temp_storage import TempStorageManager
-from .jwt_operations import JWTOperationsHandler
 from .database_operations import DatabaseOperationsHandler
 
 # Import existing modular components
 from .auth_utils import AuthUtils
 from .rate_limiter import RateLimiter
-from .jwt_manager import JWTManager
 
 
 class ECareAuthHandler:
@@ -40,14 +38,12 @@ class ECareAuthHandler:
         # Initialize existing modular components
         self.auth_utils = AuthUtils()
         self.rate_limiter = RateLimiter()
-        self.jwt_manager = JWTManager()
         
         # Authentication modules
         self.auth_steps = AuthStepsHandler(self)
         self.otp_ops = OTPOperationsHandler(self)
         self.rate_limiting = RateLimitingHandler(self)
         self.temp_storage = TempStorageManager()
-        self.jwt_ops = JWTOperationsHandler(self)
         self.db_ops = DatabaseOperationsHandler(self)
         
         print("🔧 ECareAuthHandler initialized with modular components")
@@ -78,10 +74,6 @@ class ECareAuthHandler:
     async def reset_otp_rate_limit(self, identifier: str, identifier_type: str = None) -> bool:
         """Reset rate limit for specific identifier"""
         return await self.rate_limiter.reset_rate_limit(identifier, identifier_type)
-
-    def _generate_jwt_token(self, payload: Dict[str, Any]) -> str:
-        """Generate JWT token"""
-        return self.jwt_ops.generate_token(payload)
 
     def _generate_secure_otp(self) -> str:
         """Generate secure OTP"""

@@ -10,7 +10,6 @@ from .rate_limiting import RateLimitingHandler
 from .database_operations import DatabaseOperationsHandler
 from .rate_limiter import RateLimiter
 from .temp_storage import TempStorageManager
-from .jwt_manager import JWTManager
 from .core_handler import ECareAuthHandler
 
 __all__ = [
@@ -21,6 +20,5 @@ __all__ = [
     "DatabaseOperationsHandler",
     "RateLimiter",
     "TempStorageManager",
-    "JWTManager",
     "ECareAuthHandler"
 ]
